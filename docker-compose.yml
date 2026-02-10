@@ -1,0 +1,41 @@
+services:
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=les-admin
+    volumes:
+      - ./grafana:/var/lib/grafana
+    user: "1000:1000"
+    depends_on:
+      - timescale
+    restart: unless-stopped
+
+  timescale:
+    image: timescale/timescaledb:latest-pg18
+    container_name: timescale
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - PGDATA=/pgdata
+    volumes:
+      - ./timescale_data:/pgdata
+    restart: unless-stopped
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    depends_on:
+      - timescale
+    ports:
+      - "8080:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@gatech.edu
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    volumes:
+      - ./pgadmin_data:/var/lib/pgadmin
