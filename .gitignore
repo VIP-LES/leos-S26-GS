@@ -7,3 +7,4 @@ venv/
 .idea/
 .vscode/
 node_modules/
+.ruff_cache/
