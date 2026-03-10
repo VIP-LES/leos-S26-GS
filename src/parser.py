@@ -8,7 +8,10 @@ def parse_line(raw: str) -> dict | None:
     """Parse a telemetry text line into a dict, or None if invalid.
 
     Expected format (comma-separated, first field is a timestamp):
-        Wed Feb 12 14:30:00 2026, T:24.56, P:99401.91, UV:2, ...
+        Wed Feb 12 14:30:00 2026, temperature:24.56, pressure:99401.91, uvi:2, ...
+
+    Fields may appear in any order.  For backward compatibility the legacy
+    shorthand keys T:, P:, and UV: are also accepted.
     """
     if not raw or not raw.strip():
         return None
@@ -42,36 +45,27 @@ def parse_line(raw: str) -> dict | None:
         m = re.search(pattern, tail, re.IGNORECASE)
         return float(m.group(1)) if m else None
 
-    temp = take_number(r"T:\s*([-+\d.]+)")
-    pressure = take_number(r"P:\s*([-+\d.]+)")
-    uv_raw = take_number(r"UV:\s*(\d+)")
+    temperature = take_number(r"(?:temperature|T):\s*([-+\d.]+)")
+    pressure = take_number(r"(?:pressure|P):\s*([-+\d.]+)")
+    uvi = take_number(r"(?:uvi|UV):\s*([-+\d.]+)")
+    humidity = take_number(r"humidity:\s*([-+\d.]+)")
+    light_lux = take_number(r"light_lux:\s*([-+\d.]+)")
     aqi_pm100_us = take_number(r"aqi_pm100_us:\s*([-+\d.]+)")
     aqi_pm25_us = take_number(r"aqi_pm25_us:\s*([-+\d.]+)")
     pm100_env = take_number(r"pm100_env:\s*([-+\d.]+)")
     pm25_env = take_number(r"pm25_env:\s*([-+\d.]+)")
     pm10_env = take_number(r"pm10_env:\s*([-+\d.]+)")
 
-    # Legacy fallback: A:(x, y) maps to aqi_pm100_us / aqi_pm25_us.
-    if aqi_pm100_us is None or aqi_pm25_us is None:
-        legacy = re.search(
-            r"A:\s*\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)", tail, re.IGNORECASE
-        )
-        if legacy:
-            if aqi_pm100_us is None:
-                aqi_pm100_us = float(legacy.group(1))
-            if aqi_pm25_us is None:
-                aqi_pm25_us = float(legacy.group(2))
-
-    uv = int(uv_raw) if uv_raw is not None else None
-
     return {
         "time": time.isoformat(),
-        "temp": temp,
+        "temperature": temperature,
         "pressure": pressure,
-        "aqi_pm100_us": aqi_pm100_us,
-        "aqi_pm25_us": aqi_pm25_us,
-        "pm100_env": pm100_env,
-        "pm25_env": pm25_env,
         "pm10_env": pm10_env,
-        "uv": uv,
+        "pm25_env": pm25_env,
+        "pm100_env": pm100_env,
+        "aqi_pm25_us": aqi_pm25_us,
+        "aqi_pm100_us": aqi_pm100_us,
+        "uvi": uvi,
+        "light_lux": light_lux,
+        "humidity": humidity,
     }

@@ -132,7 +132,7 @@ function transformLine(parsed, newTimestamp) {
   const timestamp = formatTimestamp(newTimestamp);
   const temp = parsed.temperature.toFixed(2);
   const pressure = parsed.pressure.toFixed(2);
-  const uv = parsed.uv;
+  const uvi = parsed.uv.toFixed(1);
   
   // AQI values from the original A field
   const aqi_pm25_us = parsed.pm25_aqi;
@@ -140,8 +140,12 @@ function transformLine(parsed, newTimestamp) {
   
   // Generate pm_env values
   const pmEnv = generatePmEnvValues(parsed.pm25_aqi, parsed.pm100_aqi);
+
+  // Generate synthetic humidity and light_lux values
+  const humidity = (Math.random() * 60 + 20).toFixed(1);        // 20–80 %
+  const light_lux = (Math.random() * 100000).toFixed(1);         // 0–100000 lux
   
-  return `${timestamp}, T:${temp}, P:${pressure}, UV:${uv}, aqi_pm100_us:${aqi_pm100_us}, aqi_pm25_us:${aqi_pm25_us}, pm100_env:${pmEnv.pm100_env}, pm25_env:${pmEnv.pm25_env}, pm10_env:${pmEnv.pm10_env}, EFM:ignored`;
+  return `${timestamp}, temperature:${temp}, pressure:${pressure}, uvi:${uvi}, aqi_pm100_us:${aqi_pm100_us}, aqi_pm25_us:${aqi_pm25_us}, pm100_env:${pmEnv.pm100_env}, pm25_env:${pmEnv.pm25_env}, pm10_env:${pmEnv.pm10_env}, light_lux:${light_lux}, humidity:${humidity}`;
 }
 
 function resolveFilePath(p) {

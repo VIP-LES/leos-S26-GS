@@ -16,14 +16,16 @@ class TelemetryPayload(BaseModel):
     """Pydantic model for incoming telemetry data."""
 
     time: str
-    temp: float | None = None
+    temperature: float | None = None
     pressure: float | None = None
-    aqi_pm100_us: float | None = None
-    aqi_pm25_us: float | None = None
-    pm100_env: float | None = None
-    pm25_env: float | None = None
     pm10_env: float | None = None
-    uv: int | None = None
+    pm25_env: float | None = None
+    pm100_env: float | None = None
+    aqi_pm25_us: float | None = None
+    aqi_pm100_us: float | None = None
+    uvi: float | None = None
+    light_lux: float | None = None
+    humidity: float | None = None
 
 
 app = FastAPI(title="LEOS Ingest API")

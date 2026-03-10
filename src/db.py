@@ -48,14 +48,16 @@ def ensure_schema():
             """
             CREATE TABLE IF NOT EXISTS launch_data (
                 time         timestamptz PRIMARY KEY,
-                temp         double precision,
+                temperature  double precision,
                 pressure     double precision,
-                aqi_pm100_us double precision,
-                aqi_pm25_us  double precision,
-                pm100_env    double precision,
-                pm25_env     double precision,
                 pm10_env     double precision,
-                uv           integer
+                pm25_env     double precision,
+                pm100_env    double precision,
+                aqi_pm25_us  double precision,
+                aqi_pm100_us double precision,
+                uvi          double precision,
+                light_lux    double precision,
+                humidity     double precision
             )
             """
         )
@@ -73,21 +75,23 @@ def insert_row(row: dict) -> bool:
     """
     sql = """
         INSERT INTO launch_data
-            (time, temp, pressure, aqi_pm100_us, aqi_pm25_us,
-             pm100_env, pm25_env, pm10_env, uv)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (time, temperature, pressure, pm10_env, pm25_env, pm100_env,
+             aqi_pm25_us, aqi_pm100_us, uvi, light_lux, humidity)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (time) DO NOTHING
     """
     values = (
         row["time"],
-        row.get("temp"),
+        row.get("temperature"),
         row.get("pressure"),
-        row.get("aqi_pm100_us"),
-        row.get("aqi_pm25_us"),
-        row.get("pm100_env"),
-        row.get("pm25_env"),
         row.get("pm10_env"),
-        row.get("uv"),
+        row.get("pm25_env"),
+        row.get("pm100_env"),
+        row.get("aqi_pm25_us"),
+        row.get("aqi_pm100_us"),
+        row.get("uvi"),
+        row.get("light_lux"),
+        row.get("humidity"),
     )
     conn = _get_conn()
     with conn.cursor() as cur:

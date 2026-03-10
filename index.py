@@ -26,6 +26,7 @@ def main():
     port = int(os.environ.get("INGEST_PORT", "4000"))
     api_url = os.environ.get("INGEST_URL", f"http://localhost:{port}")
     file_path = os.environ.get("LAUNCH_DATA_FILE", "./launch_data.txt")
+    cursor_path = os.environ.get("CURSOR_FILE", "./send_cursor.txt")
 
     # Connect to database and ensure schema exists.
     db.connect()
@@ -40,7 +41,7 @@ def main():
 
     # Start file watcher on the main thread (blocks forever).
     try:
-        start_watching(api_url, file_path)
+        start_watching(api_url, file_path, cursor_path)
     except KeyboardInterrupt:
         pass
     finally:

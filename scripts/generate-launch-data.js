@@ -47,16 +47,18 @@ function randomInt(min, max) {
 
 function makeLine(ts) {
   const timestamp = formatTimestamp(ts);
-  const temp = randomFloat(20, 40, 2); // Celsius
+  const temperature = randomFloat(20, 40, 2); // Celsius
   const pressure = randomFloat(98000, 103000, 2); // Pascals
-  const uv = randomInt(0, 11);
+  const uvi = randomFloat(0, 11, 1);
   const aqi_pm100_us = randomFloat(0, 25, 1);
   const aqi_pm25_us = randomFloat(0, 25, 1);
   const pm100_env = randomFloat(0, 50, 1);
   const pm25_env = randomFloat(0, 50, 1);
   const pm10_env = randomFloat(0, 50, 1);
+  const light_lux = randomFloat(0, 100000, 1);
+  const humidity = randomFloat(20, 80, 1);
 
-  return `${timestamp}, T:${temp}, P:${pressure}, UV:${uv}, aqi_pm100_us:${aqi_pm100_us}, aqi_pm25_us:${aqi_pm25_us}, pm100_env:${pm100_env}, pm25_env:${pm25_env}, pm10_env:${pm10_env}, EFM:ignored`;
+  return `${timestamp}, temperature:${temperature}, pressure:${pressure}, uvi:${uvi}, aqi_pm100_us:${aqi_pm100_us}, aqi_pm25_us:${aqi_pm25_us}, pm100_env:${pm100_env}, pm25_env:${pm25_env}, pm10_env:${pm10_env}, light_lux:${light_lux}, humidity:${humidity}`;
 }
 
 function resolveOutput(p) {
