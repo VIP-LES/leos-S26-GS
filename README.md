@@ -9,8 +9,8 @@ The stack is intentionally simple, modular, and easy to reason about, while rema
 
 ## High-Level Architecture
 
-**Radio Packet Decoder (host)**  
-→ **Ingest API (Docker)**  
+**Pi Receiver/Forwarder (host)**  
+→ **Ingest API (host)**  
 → **TimescaleDB (Docker)**  
 → **Grafana (Docker)**  
 → **Tailscale (host)**
@@ -19,15 +19,15 @@ The stack is intentionally simple, modular, and easy to reason about, while rema
 
 ## Layer Overview
 
-### 1. Radio Packet Decoder (Host)
-- Runs on the host (not containerized).
-- Receives raw LoRa packets and converts them into structured telemetry.
-- Handles framing, integrity checks, decoding, and timestamping.
-- Forwards decoded telemetry to the ingest API.
+### 1. Pi Receiver / Forwarder (Host)
+- Runs on the Pi host (not containerized).
+- Receives or replays telemetry, writes it to a local durable queue, and
+  forwards it to the lab-hosted ingest API.
+- Keeps local durability during connectivity loss.
 
 ---
 
-### 2. Ingest API (Docker)
+### 2. Ingest API (Host)
 - A narrow entry point for all telemetry writes.
 - Validates and normalizes incoming telemetry.
 - Writes data into the database.
@@ -51,13 +51,20 @@ The stack is intentionally simple, modular, and easy to reason about, while rema
 
 ---
 
-### 5. Multi-Laptop Access: Tailscale (Host)
-- Provides secure access to Grafana from multiple laptops in different locations.
+### 5. Tailscale (Host)
+- Provides the intended secure network path between the Pi, the lab host, and
+  remote viewers.
 - Avoids public exposure and manual network configuration.
-- Users access Grafana via the host’s Tailscale IP.
+- Is automated in the infrastructure repo on the `dev` branch after initial host
+  reachability is established.
+- For a brand-new Pi, especially on Apple hotspot, a first-boot cloud-init
+  Tailscale setup may still be needed before Ansible can take over.
 
 ---
 
 ## Summary
 
-The radio decoder handles packet-level complexity, the ingest API safely mediates data entry, TimescaleDB provides persistent storage, Grafana handles visualization, and Tailscale enables distributed access—together forming a clean and maintainable ground station stack for the Spring 2026 *Lightning from the Edge of Space* VIP project.
+The Pi-side receiver/forwarder handles edge collection and durability, the lab
+ingest API safely mediates data entry, TimescaleDB provides persistent storage,
+Grafana handles visualization, and Tailscale provides the intended secure
+network path between hosts.

@@ -1,7 +1,6 @@
-"""Entry point: starts the Ingest API server and file watcher."""
+"""Entry point for Pi-mode forwarding and lab-mode ingest."""
 
 import os
-import signal
 import threading
 import logging
 
@@ -12,8 +11,10 @@ load_dotenv()
 import uvicorn  # noqa: E402 — must import after load_dotenv
 
 from src import db  # noqa: E402
-from src.server import app  # noqa: E402
-from src.watcher import start_watching  # noqa: E402
+from src.fake_radio import run_fake_radio  # noqa: E402
+from src.forwarder import run_forwarder  # noqa: E402
+from src.ingest_api import app  # noqa: E402
+from src.queue_writer import init_queue  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,40 +24,52 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    port = int(os.environ.get("INGEST_PORT", "4000"))
-    api_url = os.environ.get("INGEST_URL", f"http://localhost:{port}")
-    file_path = os.environ.get("LAUNCH_DATA_FILE", "./launch_data.txt")
-    cursor_path = os.environ.get("CURSOR_FILE", "./send_cursor.txt")
+    mode = os.environ.get("GROUNDSTATION_MODE", "lab").strip().lower()
+    if mode == "lab":
+        run_lab_mode()
+        return
+    if mode == "pi":
+        run_pi_mode()
+        return
+    raise ValueError(f"Unsupported GROUNDSTATION_MODE: {mode}")
 
-    # Connect to database and ensure schema exists.
+
+def run_lab_mode() -> None:
+    port = int(os.environ.get("INGEST_PORT", "4000"))
     db.connect()
     db.ensure_schema()
-
-    # Start FastAPI/uvicorn in a background daemon thread.
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
-    server = uvicorn.Server(config)
-    api_thread = threading.Thread(target=server.run, daemon=True)
-    api_thread.start()
-    logger.info("Ingest API starting on port %d", port)
-
-    # Start file watcher on the main thread (blocks forever).
     try:
-        start_watching(api_url, file_path, cursor_path)
-    except KeyboardInterrupt:
-        pass
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     finally:
-        logger.info("Shutting down...")
-        server.should_exit = True
-        api_thread.join(timeout=5)
         db.close()
 
 
-def _shutdown_handler(signum, frame):
-    raise KeyboardInterrupt
+def run_pi_mode() -> None:
+    queue_path = os.environ.get("SPOOL_DB_PATH", "./spool.db")
+    ingest_url = os.environ.get("INGEST_URL", "http://localhost:4000")
+    fake_input_path = os.environ.get("FAKE_RADIO_INPUT_PATH")
+    fake_repeat = os.environ.get("FAKE_RADIO_REPEAT", "false").lower() == "true"
+    fake_interval_s = float(os.environ.get("FAKE_RADIO_INTERVAL_S", "0"))
 
+    init_queue(queue_path)
 
-signal.signal(signal.SIGINT, _shutdown_handler)
-signal.signal(signal.SIGTERM, _shutdown_handler)
+    if fake_input_path:
+        fake_thread = threading.Thread(
+            target=run_fake_radio,
+            kwargs={
+                "queue_path": queue_path,
+                "input_path": fake_input_path,
+                "repeat": fake_repeat,
+                "interval_s": fake_interval_s,
+            },
+            daemon=True,
+        )
+        fake_thread.start()
+        logger.info("Fake radio replay started from %s", fake_input_path)
+    else:
+        logger.info("Pi mode started without fake radio input; forwarder will idle")
+
+    run_forwarder(queue_path, ingest_url)
 
 if __name__ == "__main__":
     main()

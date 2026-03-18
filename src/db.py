@@ -40,13 +40,13 @@ def connect():
 
 
 def ensure_schema():
-    """Create the launch_data table and TimescaleDB hypertable if they don't exist."""
+    """Create the telemetry hypertables if they don't exist."""
     conn = _get_conn()
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS launch_data (
+            CREATE TABLE IF NOT EXISTS sensors_and_gps_data (
                 time         timestamptz PRIMARY KEY,
                 temperature  double precision,
                 pressure     double precision,
@@ -62,19 +62,35 @@ def ensure_schema():
             """
         )
         cur.execute(
-            "SELECT create_hypertable('launch_data', 'time', "
+            """
+            CREATE TABLE IF NOT EXISTS efm_data (
+                time      timestamptz PRIMARY KEY,
+                adc1_ch1  double precision,
+                adc1_ch2  double precision,
+                adc1_ch3  double precision,
+                adc1_ch4  double precision,
+                adc2_ch1  double precision,
+                adc2_ch2  double precision,
+                adc2_ch3  double precision,
+                adc2_ch4  double precision
+            )
+            """
+        )
+        cur.execute(
+            "SELECT create_hypertable('sensors_and_gps_data', 'time', "
+            "if_not_exists => TRUE, migrate_data => TRUE)"
+        )
+        cur.execute(
+            "SELECT create_hypertable('efm_data', 'time', "
             "if_not_exists => TRUE, migrate_data => TRUE)"
         )
     logger.info("Schema ensured")
 
 
-def insert_row(row: dict) -> bool:
-    """Insert a telemetry row. Returns True if inserted, False if duplicate (skipped).
-
-    Uses ON CONFLICT (time) DO NOTHING for idempotent writes.
-    """
+def insert_sensors_and_gps_row(row: dict) -> bool:
+    """Insert one slow telemetry row."""
     sql = """
-        INSERT INTO launch_data
+        INSERT INTO sensors_and_gps_data
             (time, temperature, pressure, pm10_env, pm25_env, pm100_env,
              aqi_pm25_us, aqi_pm100_us, uvi, light_lux, humidity)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -104,6 +120,43 @@ def insert_row(row: dict) -> bool:
         logger.debug("Duplicate row at time %s, skipped", row["time"])
 
     return inserted
+
+
+def insert_efm_row(row: dict) -> bool:
+    """Insert one EFM row."""
+    sql = """
+        INSERT INTO efm_data
+            (time, adc1_ch1, adc1_ch2, adc1_ch3, adc1_ch4,
+             adc2_ch1, adc2_ch2, adc2_ch3, adc2_ch4)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (time) DO NOTHING
+    """
+    values = (
+        row["time"],
+        row.get("adc1_ch1"),
+        row.get("adc1_ch2"),
+        row.get("adc1_ch3"),
+        row.get("adc1_ch4"),
+        row.get("adc2_ch1"),
+        row.get("adc2_ch2"),
+        row.get("adc2_ch3"),
+        row.get("adc2_ch4"),
+    )
+    conn = _get_conn()
+    with conn.cursor() as cur:
+        cur.execute(sql, values)
+        inserted = cur.rowcount > 0
+
+    if inserted:
+        logger.info("Inserted EFM row at time %s", row["time"])
+    else:
+        logger.debug("Duplicate EFM row at time %s, skipped", row["time"])
+    return inserted
+
+
+def insert_row(row: dict) -> bool:
+    """Backward-compatible alias for the original single-stream API."""
+    return insert_sensors_and_gps_row(row)
 
 
 def close():

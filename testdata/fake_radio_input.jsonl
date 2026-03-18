@@ -1,0 +1,7 @@
+# One JSON record per line. Each record is converted into an RF frame using the
+# shared telemetry decoder, then decoded and enqueued through the same Pi-side
+# path used for replay testing.
+{"message_type":"sensors_and_gps","sequence":1,"payload":{"time":"2026-03-18T12:00:00+00:00","temperature":22.5,"pressure":100845.0,"pm10_env":4.0,"pm25_env":2.0,"pm100_env":1.0,"aqi_pm25_us":9.0,"aqi_pm100_us":11.0,"uvi":3.0,"light_lux":1250.0,"humidity":48.0}}
+{"message_type":"sensors_and_gps","sequence":2,"payload":{"time":"2026-03-18T12:00:01+00:00","temperature":22.6,"pressure":100844.0,"pm10_env":4.2,"pm25_env":2.1,"pm100_env":1.1,"aqi_pm25_us":9.0,"aqi_pm100_us":11.0,"uvi":3.0,"light_lux":1252.0,"humidity":48.2}}
+{"message_type":"efm","sequence":1,"payload":{"time":"2026-03-18T12:00:00+00:00","adc1_ch1":0.11,"adc1_ch2":0.22,"adc1_ch3":0.33,"adc1_ch4":0.44,"adc2_ch1":0.55,"adc2_ch2":0.66,"adc2_ch3":0.77,"adc2_ch4":0.88}}
+{"message_type":"efm","sequence":2,"payload":{"time":"2026-03-18T12:00:01+00:00","adc1_ch1":0.12,"adc1_ch2":0.24,"adc1_ch3":0.36,"adc1_ch4":0.48,"adc2_ch1":0.60,"adc2_ch2":0.72,"adc2_ch3":0.84,"adc2_ch4":0.96}}
