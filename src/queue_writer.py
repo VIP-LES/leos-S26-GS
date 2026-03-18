@@ -16,6 +16,8 @@ def _connect(queue_path: str) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(queue_path) or ".", exist_ok=True)
     conn = sqlite3.connect(queue_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")     # ← add this
+    conn.execute("PRAGMA synchronous=NORMAL")   # ← good practice with WAL
     return conn
 
 

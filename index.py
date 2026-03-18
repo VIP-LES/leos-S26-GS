@@ -45,7 +45,7 @@ def run_lab_mode() -> None:
 
 
 def run_pi_mode() -> None:
-    queue_path = os.environ.get("SPOOL_DB_PATH", "./spool.db")
+    queue_path = os.environ.get("SPOOL_DB_PATH", "/home/pi/leos-state/spool.db")
     ingest_url = os.environ.get("INGEST_URL", "http://localhost:4000")
     fake_input_path = os.environ.get("FAKE_RADIO_INPUT_PATH")
     fake_repeat = os.environ.get("FAKE_RADIO_REPEAT", "false").lower() == "true"
