@@ -48,34 +48,67 @@ def ensure_schema():
             """
             CREATE TABLE IF NOT EXISTS sensors_and_gps_data (
                 time         timestamptz PRIMARY KEY,
+                gps_utc      timestamptz,
                 temperature  double precision,
                 pressure     double precision,
+                humidity     double precision,
+                altitude     double precision,
+                gas_resistance double precision,
+                light_lux    double precision,
+                uvi          double precision,
                 pm10_env     double precision,
                 pm25_env     double precision,
                 pm100_env    double precision,
                 aqi_pm25_us  double precision,
                 aqi_pm100_us double precision,
-                uvi          double precision,
-                light_lux    double precision,
-                humidity     double precision
+                gps_fix_ok   boolean,
+                gps_lat      double precision,
+                gps_lon      double precision,
+                gps_alt_m    double precision,
+                gps_speed_mps double precision,
+                gps_track_deg double precision,
+                gps_sats_used integer,
+                gps_sats_visible integer
             )
             """
         )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS efm_data (
-                time      timestamptz PRIMARY KEY,
-                adc1_ch1  double precision,
-                adc1_ch2  double precision,
-                adc1_ch3  double precision,
-                adc1_ch4  double precision,
-                adc2_ch1  double precision,
-                adc2_ch2  double precision,
-                adc2_ch3  double precision,
-                adc2_ch4  double precision
+                time                timestamptz PRIMARY KEY,
+                adc1_ch1_diff       double precision,
+                adc1_ch2_sensing    double precision,
+                adc1_ch3_reference  double precision,
+                adc1_ch4_breakbeam  double precision,
+                adc2_ch1_diff       double precision,
+                adc2_ch2_sensing    double precision,
+                adc2_ch3_reference  double precision,
+                adc2_ch4_breakbeam  double precision
             )
             """
         )
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_utc timestamptz")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS humidity double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS altitude double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gas_resistance double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS light_lux double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS uvi double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_fix_ok boolean")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_lat double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_lon double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_alt_m double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_speed_mps double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_track_deg double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_sats_used integer")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_sats_visible integer")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch1_diff double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch2_sensing double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch3_reference double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch4_breakbeam double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch1_diff double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch2_sensing double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch3_reference double precision")
+        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch4_breakbeam double precision")
         cur.execute(
             "SELECT create_hypertable('sensors_and_gps_data', 'time', "
             "if_not_exists => TRUE, migrate_data => TRUE)"
@@ -91,23 +124,38 @@ def insert_sensors_and_gps_row(row: dict) -> bool:
     """Insert one slow telemetry row."""
     sql = """
         INSERT INTO sensors_and_gps_data
-            (time, temperature, pressure, pm10_env, pm25_env, pm100_env,
-             aqi_pm25_us, aqi_pm100_us, uvi, light_lux, humidity)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (time, gps_utc, temperature, pressure, humidity, altitude,
+             gas_resistance, light_lux, uvi, pm10_env, pm25_env, pm100_env,
+             aqi_pm25_us, aqi_pm100_us, gps_fix_ok, gps_lat, gps_lon,
+             gps_alt_m, gps_speed_mps, gps_track_deg, gps_sats_used,
+             gps_sats_visible)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (time) DO NOTHING
     """
     values = (
         row["time"],
+        row.get("gps_utc"),
         row.get("temperature"),
         row.get("pressure"),
+        row.get("humidity"),
+        row.get("altitude"),
+        row.get("gas_resistance"),
+        row.get("light_lux"),
+        row.get("uvi"),
         row.get("pm10_env"),
         row.get("pm25_env"),
         row.get("pm100_env"),
         row.get("aqi_pm25_us"),
         row.get("aqi_pm100_us"),
-        row.get("uvi"),
-        row.get("light_lux"),
-        row.get("humidity"),
+        row.get("gps_fix_ok"),
+        row.get("gps_lat"),
+        row.get("gps_lon"),
+        row.get("gps_alt_m"),
+        row.get("gps_speed_mps"),
+        row.get("gps_track_deg"),
+        row.get("gps_sats_used"),
+        row.get("gps_sats_visible"),
     )
     conn = _get_conn()
     with conn.cursor() as cur:
@@ -126,21 +174,22 @@ def insert_efm_row(row: dict) -> bool:
     """Insert one EFM row."""
     sql = """
         INSERT INTO efm_data
-            (time, adc1_ch1, adc1_ch2, adc1_ch3, adc1_ch4,
-             adc2_ch1, adc2_ch2, adc2_ch3, adc2_ch4)
+            (time, adc1_ch1_diff, adc1_ch2_sensing, adc1_ch3_reference,
+             adc1_ch4_breakbeam, adc2_ch1_diff, adc2_ch2_sensing,
+             adc2_ch3_reference, adc2_ch4_breakbeam)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (time) DO NOTHING
     """
     values = (
         row["time"],
-        row.get("adc1_ch1"),
-        row.get("adc1_ch2"),
-        row.get("adc1_ch3"),
-        row.get("adc1_ch4"),
-        row.get("adc2_ch1"),
-        row.get("adc2_ch2"),
-        row.get("adc2_ch3"),
-        row.get("adc2_ch4"),
+        row.get("adc1_ch1_diff"),
+        row.get("adc1_ch2_sensing"),
+        row.get("adc1_ch3_reference"),
+        row.get("adc1_ch4_breakbeam"),
+        row.get("adc2_ch1_diff"),
+        row.get("adc2_ch2_sensing"),
+        row.get("adc2_ch3_reference"),
+        row.get("adc2_ch4_breakbeam"),
     )
     conn = _get_conn()
     with conn.cursor() as cur:

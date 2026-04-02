@@ -1,6 +1,11 @@
 import unittest
 
-from src.telemetry_decoder import crc16_ccitt_false, decode_rf_frame, encode_rf_frame
+from src.telemetry_decoder import (
+    crc16_ccitt_false,
+    decode_rf_frame,
+    encode_rf_frame,
+    rf_payload_to_ingest_payload,
+)
 
 
 class TelemetryDecoderTests(unittest.TestCase):
@@ -10,40 +15,69 @@ class TelemetryDecoderTests(unittest.TestCase):
     def test_round_trip_sensor_payload(self):
         payload = {
             "time": "2026-03-18T00:00:00+00:00",
-            "temperature": 24.5,
-            "pressure": 101325.0,
-            "pm10_env": None,
-            "pm25_env": 1.0,
-            "pm100_env": 2.0,
-            "aqi_pm25_us": 3.0,
-            "aqi_pm100_us": 4.0,
-            "uvi": 5.0,
-            "light_lux": 6.0,
-            "humidity": 7.0,
+            "bme688_valid": True,
+            "bme688": {
+                "humidity": 7.0,
+                "pressure": 101325.0,
+                "temperature": 24.5,
+                "altitude": 123.0,
+                "gas_resistance": 456.0,
+            },
+            "tsl2591_valid": True,
+            "tsl2591": {"light_lux": 6.0},
+            "ltr390_valid": False,
+            "ltr390": {"uvi": 5},
+            "pmsa003i_valid": True,
+            "pmsa003i": {
+                "pm10_env": 10,
+                "pm25_env": 20,
+                "pm100_env": 30,
+                "aqi_pm25_us": 40,
+                "aqi_pm100_us": 50,
+            },
+            "gps": {
+                "fix_ok": True,
+                "lat": 42.1,
+                "lon": -83.7,
+                "alt_m": 300.0,
+                "speed_mps": 12.5,
+                "track_deg": 181.0,
+                "sats_used": 8,
+                "sats_visible": 12,
+                "gps_utc": "2026-03-18T00:00:00+00:00",
+            },
         }
         frame = encode_rf_frame("sensors_and_gps", payload, sequence=12)
         message_type, decoded = decode_rf_frame(frame)
+        ingest_payload = rf_payload_to_ingest_payload(message_type, decoded)
         self.assertEqual(message_type, "sensors_and_gps")
-        self.assertEqual(decoded["time"], "2026-03-18T00:00:00+00:00")
-        self.assertAlmostEqual(decoded["temperature"], 24.5, places=4)
-        self.assertIsNone(decoded["pm10_env"])
+        self.assertAlmostEqual(decoded["bme688"]["temperature"], 24.5, places=4)
+        self.assertFalse(decoded["ltr390_valid"])
+        self.assertEqual(ingest_payload["time"], "2026-03-18T00:00:00+00:00")
+        self.assertAlmostEqual(ingest_payload["temperature"], 24.5, places=4)
+        self.assertIsNone(ingest_payload["uvi"])
+        self.assertEqual(ingest_payload["gps_utc"], "2026-03-18T00:00:00+00:00")
 
     def test_round_trip_efm_payload(self):
         payload = {
             "time": "2026-03-18T00:00:00+00:00",
-            "adc1_ch1": 1.0,
-            "adc1_ch2": 2.0,
-            "adc1_ch3": 3.0,
-            "adc1_ch4": 4.0,
-            "adc2_ch1": 5.0,
-            "adc2_ch2": 6.0,
-            "adc2_ch3": 7.0,
-            "adc2_ch4": 8.0,
+            "valid": False,
+            "adc1_ch1_diff": 1.0,
+            "adc1_ch2_sensing": 2.0,
+            "adc1_ch3_reference": 3.0,
+            "adc1_ch4_breakbeam": 4.0,
+            "adc2_ch1_diff": 5.0,
+            "adc2_ch2_sensing": 6.0,
+            "adc2_ch3_reference": 7.0,
+            "adc2_ch4_breakbeam": 8.0,
         }
         frame = encode_rf_frame("efm", payload, sequence=9)
         message_type, decoded = decode_rf_frame(frame)
+        ingest_payload = rf_payload_to_ingest_payload(message_type, decoded)
         self.assertEqual(message_type, "efm")
-        self.assertAlmostEqual(decoded["adc2_ch4"], 8.0, places=4)
+        self.assertFalse(decoded["valid"])
+        self.assertAlmostEqual(decoded["adc2_ch4_breakbeam"], 8.0, places=4)
+        self.assertIsNone(ingest_payload["adc2_ch4_breakbeam"])
 
 
 if __name__ == "__main__":

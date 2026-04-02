@@ -7,7 +7,12 @@ import logging
 import time
 
 from src import queue_writer
-from src.telemetry_decoder import decode_hex_frame, decode_rf_frame, encode_rf_frame
+from src.telemetry_decoder import (
+    decode_hex_frame_to_ingest_payload,
+    decode_rf_frame,
+    encode_rf_frame,
+    rf_payload_to_ingest_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +30,15 @@ def _decode_record(line: str) -> tuple[str, dict]:
     if line.startswith("{"):
         record = json.loads(line)
         if "frame_hex" in record:
-            return decode_hex_frame(record["frame_hex"])
+            return decode_hex_frame_to_ingest_payload(record["frame_hex"])
 
         message_type = record["message_type"]
         payload = record["payload"]
         frame = encode_rf_frame(message_type, payload, sequence=record.get("sequence", 0))
-        return decode_rf_frame(frame)
+        decoded_message_type, decoded_payload = decode_rf_frame(frame)
+        return decoded_message_type, rf_payload_to_ingest_payload(decoded_message_type, decoded_payload)
 
-    return decode_hex_frame(line)
+    return decode_hex_frame_to_ingest_payload(line)
 
 
 def run_fake_radio(

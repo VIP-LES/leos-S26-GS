@@ -31,9 +31,18 @@ def _validate_time(time_str: str) -> JSONResponse | None:
     return None
 
 
+def _validate_optional_time(time_str: str | None) -> JSONResponse | None:
+    if time_str is None:
+        return None
+    return _validate_time(time_str)
+
+
 @app.post("/ingest/sensors-and-gps")
 def ingest_sensors_and_gps(payload: SensorsAndGpsPayload):
     error = _validate_time(payload.time)
+    if error is not None:
+        return error
+    error = _validate_optional_time(payload.gps_utc)
     if error is not None:
         return error
 
