@@ -1,0 +1,1 @@
+pm2 start "uv run python index.py" --name my-app
