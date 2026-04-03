@@ -24,9 +24,14 @@ class TelemetryDecoderTests(unittest.TestCase):
                 "gas_resistance": 456.0,
             },
             "tsl2591_valid": True,
-            "tsl2591": {"light_lux": 6.0},
+            "tsl2591": {
+                "light_lux": 6.0,
+                "raw_visible": 601,
+                "raw_infrared": 602,
+                "raw_full_spectrum": 603,
+            },
             "ltr390_valid": False,
-            "ltr390": {"uvi": 5},
+            "ltr390": {"uvs": 5000},
             "pmsa003i_valid": True,
             "pmsa003i": {
                 "pm10_env": 10,
@@ -34,6 +39,12 @@ class TelemetryDecoderTests(unittest.TestCase):
                 "pm100_env": 30,
                 "aqi_pm25_us": 40,
                 "aqi_pm100_us": 50,
+                "particles_03um": 60,
+                "particles_05um": 70,
+                "particles_10um": 80,
+                "particles_25um": 90,
+                "particles_50um": 100,
+                "particles_100um": 110,
             },
             "gps": {
                 "fix_ok": True,
@@ -52,10 +63,18 @@ class TelemetryDecoderTests(unittest.TestCase):
         ingest_payload = rf_payload_to_ingest_payload(message_type, decoded)
         self.assertEqual(message_type, "sensors_and_gps")
         self.assertAlmostEqual(decoded["bme688"]["temperature"], 24.5, places=4)
+        self.assertEqual(decoded["tsl2591"]["raw_visible"], 601)
+        self.assertEqual(decoded["tsl2591"]["raw_infrared"], 602)
+        self.assertEqual(decoded["tsl2591"]["raw_full_spectrum"], 603)
         self.assertFalse(decoded["ltr390_valid"])
+        self.assertEqual(decoded["ltr390"]["uvs"], 5000)
+        self.assertEqual(decoded["pmsa003i"]["particles_100um"], 110)
         self.assertEqual(ingest_payload["time"], "2026-03-18T00:00:00+00:00")
         self.assertAlmostEqual(ingest_payload["temperature"], 24.5, places=4)
-        self.assertIsNone(ingest_payload["uvi"])
+        self.assertEqual(ingest_payload["raw_visible"], 601)
+        self.assertEqual(ingest_payload["raw_full_spectrum"], 603)
+        self.assertIsNone(ingest_payload["uvs"])
+        self.assertEqual(ingest_payload["particles_25um"], 90.0)
         self.assertEqual(ingest_payload["gps_utc"], "2026-03-18T00:00:00+00:00")
 
     def test_round_trip_efm_payload(self):

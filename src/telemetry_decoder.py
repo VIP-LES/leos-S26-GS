@@ -14,7 +14,7 @@ RF_MESSAGE_SENSOR_GPS = 0x01
 RF_MESSAGE_EFM = 0x02
 RF_MESSAGE_COMMAND = 0x03
 
-RADIO_SENSOR_GPS_PAYLOAD_SIZE = 97
+RADIO_SENSOR_GPS_PAYLOAD_SIZE = 131
 RADIO_EFM_PAYLOAD_SIZE = 41
 
 MESSAGE_TYPE_TO_QUEUE = {
@@ -150,11 +150,14 @@ def _decode_sensor_gps_payload(payload_bytes: bytes) -> dict:
 
     tsl2591 = {}
     tsl2591["light_lux"], offset = _read_float_le(payload_bytes, offset)
+    tsl2591["raw_visible"], offset = _read_u16_le(payload_bytes, offset)
+    tsl2591["raw_infrared"], offset = _read_u16_le(payload_bytes, offset)
+    tsl2591["raw_full_spectrum"], offset = _read_u32_le(payload_bytes, offset)
     payload["tsl2591_valid"], offset = _read_bool(payload_bytes, offset)
     payload["tsl2591"] = tsl2591
 
     ltr390 = {}
-    ltr390["uvi"], offset = _read_u16_le(payload_bytes, offset)
+    ltr390["uvs"], offset = _read_u32_le(payload_bytes, offset)
     payload["ltr390_valid"], offset = _read_bool(payload_bytes, offset)
     payload["ltr390"] = ltr390
 
@@ -164,6 +167,12 @@ def _decode_sensor_gps_payload(payload_bytes: bytes) -> dict:
     pmsa003i["pm100_env"], offset = _read_u32_le(payload_bytes, offset)
     pmsa003i["aqi_pm25_us"], offset = _read_u32_le(payload_bytes, offset)
     pmsa003i["aqi_pm100_us"], offset = _read_u32_le(payload_bytes, offset)
+    pmsa003i["particles_03um"], offset = _read_u32_le(payload_bytes, offset)
+    pmsa003i["particles_05um"], offset = _read_u32_le(payload_bytes, offset)
+    pmsa003i["particles_10um"], offset = _read_u32_le(payload_bytes, offset)
+    pmsa003i["particles_25um"], offset = _read_u32_le(payload_bytes, offset)
+    pmsa003i["particles_50um"], offset = _read_u32_le(payload_bytes, offset)
+    pmsa003i["particles_100um"], offset = _read_u32_le(payload_bytes, offset)
     payload["pmsa003i_valid"], offset = _read_bool(payload_bytes, offset)
     payload["pmsa003i"] = pmsa003i
 
@@ -224,10 +233,13 @@ def _encode_sensor_gps_payload(payload: dict) -> bytes:
 
     tsl2591 = payload["tsl2591"]
     _write_float_le(buf, tsl2591["light_lux"])
+    _write_u16_le(buf, tsl2591["raw_visible"])
+    _write_u16_le(buf, tsl2591["raw_infrared"])
+    _write_u32_le(buf, tsl2591["raw_full_spectrum"])
     _write_bool(buf, bool(payload.get("tsl2591_valid", tsl2591.get("valid", True))))
 
     ltr390 = payload["ltr390"]
-    _write_u16_le(buf, ltr390["uvi"])
+    _write_u32_le(buf, ltr390["uvs"])
     _write_bool(buf, bool(payload.get("ltr390_valid", ltr390.get("valid", True))))
 
     pmsa003i = payload["pmsa003i"]
@@ -236,6 +248,12 @@ def _encode_sensor_gps_payload(payload: dict) -> bytes:
     _write_u32_le(buf, pmsa003i["pm100_env"])
     _write_u32_le(buf, pmsa003i["aqi_pm25_us"])
     _write_u32_le(buf, pmsa003i["aqi_pm100_us"])
+    _write_u32_le(buf, pmsa003i["particles_03um"])
+    _write_u32_le(buf, pmsa003i["particles_05um"])
+    _write_u32_le(buf, pmsa003i["particles_10um"])
+    _write_u32_le(buf, pmsa003i["particles_25um"])
+    _write_u32_le(buf, pmsa003i["particles_50um"])
+    _write_u32_le(buf, pmsa003i["particles_100um"])
     _write_bool(buf, bool(payload.get("pmsa003i_valid", pmsa003i.get("valid", True))))
 
     gps = payload["gps"]
@@ -352,12 +370,21 @@ def rf_payload_to_ingest_payload(message_type: str, payload: dict) -> dict:
             "altitude": payload["bme688"]["altitude"] if bme688_valid else None,
             "gas_resistance": payload["bme688"]["gas_resistance"] if bme688_valid else None,
             "light_lux": payload["tsl2591"]["light_lux"] if tsl2591_valid else None,
-            "uvi": float(payload["ltr390"]["uvi"]) if ltr390_valid else None,
+            "raw_visible": payload["tsl2591"]["raw_visible"] if tsl2591_valid else None,
+            "raw_infrared": payload["tsl2591"]["raw_infrared"] if tsl2591_valid else None,
+            "raw_full_spectrum": payload["tsl2591"]["raw_full_spectrum"] if tsl2591_valid else None,
+            "uvs": float(payload["ltr390"]["uvs"]) if ltr390_valid else None,
             "pm10_env": float(payload["pmsa003i"]["pm10_env"]) if pmsa003i_valid else None,
             "pm25_env": float(payload["pmsa003i"]["pm25_env"]) if pmsa003i_valid else None,
             "pm100_env": float(payload["pmsa003i"]["pm100_env"]) if pmsa003i_valid else None,
             "aqi_pm25_us": float(payload["pmsa003i"]["aqi_pm25_us"]) if pmsa003i_valid else None,
             "aqi_pm100_us": float(payload["pmsa003i"]["aqi_pm100_us"]) if pmsa003i_valid else None,
+            "particles_03um": float(payload["pmsa003i"]["particles_03um"]) if pmsa003i_valid else None,
+            "particles_05um": float(payload["pmsa003i"]["particles_05um"]) if pmsa003i_valid else None,
+            "particles_10um": float(payload["pmsa003i"]["particles_10um"]) if pmsa003i_valid else None,
+            "particles_25um": float(payload["pmsa003i"]["particles_25um"]) if pmsa003i_valid else None,
+            "particles_50um": float(payload["pmsa003i"]["particles_50um"]) if pmsa003i_valid else None,
+            "particles_100um": float(payload["pmsa003i"]["particles_100um"]) if pmsa003i_valid else None,
             "gps_fix_ok": gps["fix_ok"],
             "gps_lat": gps["lat"],
             "gps_lon": gps["lon"],

@@ -55,12 +55,21 @@ def ensure_schema():
                 altitude     double precision,
                 gas_resistance double precision,
                 light_lux    double precision,
-                uvi          double precision,
+                raw_visible  integer,
+                raw_infrared integer,
+                raw_full_spectrum bigint,
+                uvs          double precision,
                 pm10_env     double precision,
                 pm25_env     double precision,
                 pm100_env    double precision,
                 aqi_pm25_us  double precision,
                 aqi_pm100_us double precision,
+                particles_03um double precision,
+                particles_05um double precision,
+                particles_10um double precision,
+                particles_25um double precision,
+                particles_50um double precision,
+                particles_100um double precision,
                 gps_fix_ok   boolean,
                 gps_lat      double precision,
                 gps_lon      double precision,
@@ -92,7 +101,16 @@ def ensure_schema():
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS altitude double precision")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gas_resistance double precision")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS light_lux double precision")
-        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS uvi double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS raw_visible integer")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS raw_infrared integer")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS raw_full_spectrum bigint")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS uvs double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS particles_03um double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS particles_05um double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS particles_10um double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS particles_25um double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS particles_50um double precision")
+        cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS particles_100um double precision")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_fix_ok boolean")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_lat double precision")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_lon double precision")
@@ -125,12 +143,16 @@ def insert_sensors_and_gps_row(row: dict) -> bool:
     sql = """
         INSERT INTO sensors_and_gps_data
             (time, gps_utc, temperature, pressure, humidity, altitude,
-             gas_resistance, light_lux, uvi, pm10_env, pm25_env, pm100_env,
-             aqi_pm25_us, aqi_pm100_us, gps_fix_ok, gps_lat, gps_lon,
+             gas_resistance, light_lux, raw_visible, raw_infrared,
+             raw_full_spectrum, uvs, pm10_env, pm25_env, pm100_env,
+             aqi_pm25_us, aqi_pm100_us, particles_03um, particles_05um,
+             particles_10um, particles_25um, particles_50um, particles_100um,
+             gps_fix_ok, gps_lat, gps_lon,
              gps_alt_m, gps_speed_mps, gps_track_deg, gps_sats_used,
              gps_sats_visible)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s)
         ON CONFLICT (time) DO NOTHING
     """
     values = (
@@ -142,12 +164,21 @@ def insert_sensors_and_gps_row(row: dict) -> bool:
         row.get("altitude"),
         row.get("gas_resistance"),
         row.get("light_lux"),
-        row.get("uvi"),
+        row.get("raw_visible"),
+        row.get("raw_infrared"),
+        row.get("raw_full_spectrum"),
+        row.get("uvs"),
         row.get("pm10_env"),
         row.get("pm25_env"),
         row.get("pm100_env"),
         row.get("aqi_pm25_us"),
         row.get("aqi_pm100_us"),
+        row.get("particles_03um"),
+        row.get("particles_05um"),
+        row.get("particles_10um"),
+        row.get("particles_25um"),
+        row.get("particles_50um"),
+        row.get("particles_100um"),
         row.get("gps_fix_ok"),
         row.get("gps_lat"),
         row.get("gps_lon"),
