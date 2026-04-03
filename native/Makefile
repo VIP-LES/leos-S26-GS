@@ -3,8 +3,9 @@ LEOS_SDK_DIR ?= ../external/leos-sdk
 BUILD_DIR ?= build
 TARGET := $(BUILD_DIR)/radio_receiver
 
-CFLAGS += -std=c11 -O2 -Wall -Wextra -I$(LEOS_SDK_DIR)/src/leos_sx126x/include -I$(LEOS_SDK_DIR)/src/leos_sx126x -I$(LEOS_SDK_DIR)/external/sx1262/src
+CFLAGS += -std=c11 -O2 -Wall -Wextra -pthread -I$(LEOS_SDK_DIR)/src/leos_sx126x/include -I$(LEOS_SDK_DIR)/src/leos_sx126x -I$(LEOS_SDK_DIR)/external/sx1262/src
 CFLAGS += $(shell pkg-config --cflags libgpiod 2>/dev/null)
+LDFLAGS += -pthread
 LDFLAGS += $(shell pkg-config --libs libgpiod 2>/dev/null)
 
 SOURCES := \

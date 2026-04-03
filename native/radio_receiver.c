@@ -4,6 +4,8 @@
 #include <fcntl.h>
 #include <gpiod.h>
 #include <poll.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -59,7 +61,7 @@ typedef struct
 {
     leos_radio_t radio;
     struct gpiod_line *dio1_line;
-    bool irq_pending;
+    atomic_bool irq_pending;
     leos_radio_hw_config_t hw;
     leos_radio_config_t cfg;
 } radio_state_t;
@@ -70,7 +72,11 @@ typedef struct
     int spi_fd;
     int server_fd;
     int client_fd;
+    int irq_pipe_read_fd;
+    int irq_pipe_write_fd;
     struct gpiod_chip *gpio_chip;
+    pthread_t irq_thread;
+    atomic_bool stop_requested;
     radio_state_t sx1262;
     radio_state_t sx1268;
 } app_state_t;
@@ -269,7 +275,7 @@ static int service_radio_irq(app_state_t *state, radio_state_t *radio)
 {
     leos_radio_status_t status;
 
-    radio->irq_pending = false;
+    atomic_store(&radio->irq_pending, false);
     leos_sx126x_handle_dio1_irq(radio->radio);
 
     status = leos_sx126x_process_irq(radio->radio);
@@ -350,8 +356,89 @@ static int request_dio1_line(app_state_t *state, radio_state_t *radio)
     return gpiod_line_request_rising_edge_events(radio->dio1_line, "leos_radio_receiver");
 }
 
+static void wake_main_loop(app_state_t *state)
+{
+    uint8_t byte = 1u;
+
+    if (state->irq_pipe_write_fd < 0)
+    {
+        return;
+    }
+
+    (void)write(state->irq_pipe_write_fd, &byte, sizeof(byte));
+}
+
+static void drain_irq_pipe(app_state_t *state)
+{
+    uint8_t buf[32];
+
+    if (state->irq_pipe_read_fd < 0)
+    {
+        return;
+    }
+
+    while (read(state->irq_pipe_read_fd, buf, sizeof(buf)) > 0)
+    {
+    }
+}
+
+static void *irq_thread_main(void *arg)
+{
+    app_state_t *state = (app_state_t *)arg;
+    int sx1262_fd = gpiod_line_event_get_fd(state->sx1262.dio1_line);
+    int sx1268_fd = gpiod_line_event_get_fd(state->sx1268.dio1_line);
+
+    for (;;)
+    {
+        struct pollfd fds[2];
+        int poll_rc;
+
+        if (atomic_load(&state->stop_requested))
+        {
+            break;
+        }
+
+        fds[0].fd = sx1262_fd;
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        fds[1].fd = sx1268_fd;
+        fds[1].events = POLLIN;
+        fds[1].revents = 0;
+
+        poll_rc = poll(fds, 2, 100);
+        if (poll_rc <= 0)
+        {
+            continue;
+        }
+
+        if ((fds[0].revents & POLLIN) != 0)
+        {
+            struct gpiod_line_event event;
+            if (gpiod_line_event_read(state->sx1262.dio1_line, &event) == 0)
+            {
+                atomic_store(&state->sx1262.irq_pending, true);
+                wake_main_loop(state);
+            }
+        }
+
+        if ((fds[1].revents & POLLIN) != 0)
+        {
+            struct gpiod_line_event event;
+            if (gpiod_line_event_read(state->sx1268.dio1_line, &event) == 0)
+            {
+                atomic_store(&state->sx1268.irq_pending, true);
+                wake_main_loop(state);
+            }
+        }
+    }
+
+    return NULL;
+}
+
 static int init_state(app_state_t *state)
 {
+    int irq_pipe_fds[2];
+
     state->spi_fd = open_spi_device(state->config.spi_device);
     if (state->spi_fd < 0)
     {
@@ -387,6 +474,14 @@ static int init_state(app_state_t *state)
         return -1;
     }
 
+    if (pipe(irq_pipe_fds) != 0)
+    {
+        return -1;
+    }
+    state->irq_pipe_read_fd = irq_pipe_fds[0];
+    state->irq_pipe_write_fd = irq_pipe_fds[1];
+    (void)fcntl(state->irq_pipe_read_fd, F_SETFL, O_NONBLOCK);
+
     if (leos_sx126x_init(LEOS_RADIO_SX1262, &state->sx1262.hw, &state->sx1262.cfg) != LEOS_RADIO_OK)
     {
         return -1;
@@ -404,11 +499,23 @@ static int init_state(app_state_t *state)
         return -1;
     }
 
+    if (pthread_create(&state->irq_thread, NULL, irq_thread_main, state) != 0)
+    {
+        return -1;
+    }
+
     return 0;
 }
 
 static void cleanup_state(app_state_t *state)
 {
+    if (state->irq_thread != 0)
+    {
+        atomic_store(&state->stop_requested, true);
+        wake_main_loop(state);
+        (void)pthread_join(state->irq_thread, NULL);
+        state->irq_thread = 0;
+    }
     if (state->sx1268.dio1_line != NULL)
     {
         gpiod_line_release(state->sx1268.dio1_line);
@@ -435,6 +542,16 @@ static void cleanup_state(app_state_t *state)
         unlink(state->config.socket_path);
         state->server_fd = -1;
     }
+    if (state->irq_pipe_read_fd >= 0)
+    {
+        close(state->irq_pipe_read_fd);
+        state->irq_pipe_read_fd = -1;
+    }
+    if (state->irq_pipe_write_fd >= 0)
+    {
+        close(state->irq_pipe_write_fd);
+        state->irq_pipe_write_fd = -1;
+    }
     if (state->spi_fd >= 0)
     {
         close(state->spi_fd);
@@ -450,6 +567,8 @@ int main(void)
     state.spi_fd = -1;
     state.server_fd = -1;
     state.client_fd = -1;
+    state.irq_pipe_read_fd = -1;
+    state.irq_pipe_write_fd = -1;
     load_config(&state.config);
 
     if (init_state(&state) != 0)
@@ -461,10 +580,8 @@ int main(void)
 
     for (;;)
     {
-        struct pollfd fds[4];
+        struct pollfd fds[3];
         nfds_t nfds = 0u;
-        int sx1262_fd = gpiod_line_event_get_fd(state.sx1262.dio1_line);
-        int sx1268_fd = gpiod_line_event_get_fd(state.sx1268.dio1_line);
         int poll_rc;
 
         fds[nfds].fd = state.server_fd;
@@ -480,12 +597,7 @@ int main(void)
             nfds++;
         }
 
-        fds[nfds].fd = sx1262_fd;
-        fds[nfds].events = POLLIN;
-        fds[nfds].revents = 0;
-        nfds++;
-
-        fds[nfds].fd = sx1268_fd;
+        fds[nfds].fd = state.irq_pipe_read_fd;
         fds[nfds].events = POLLIN;
         fds[nfds].revents = 0;
         nfds++;
@@ -515,31 +627,17 @@ int main(void)
                 continue;
             }
 
-            if (fds[i].fd == sx1262_fd)
+            if (fds[i].fd == state.irq_pipe_read_fd)
             {
-                struct gpiod_line_event event;
-                if (gpiod_line_event_read(state.sx1262.dio1_line, &event) == 0)
-                {
-                    state.sx1262.irq_pending = true;
-                }
-                continue;
-            }
-
-            if (fds[i].fd == sx1268_fd)
-            {
-                struct gpiod_line_event event;
-                if (gpiod_line_event_read(state.sx1268.dio1_line, &event) == 0)
-                {
-                    state.sx1268.irq_pending = true;
-                }
+                drain_irq_pipe(&state);
             }
         }
 
-        if (state.sx1262.irq_pending)
+        if (atomic_load(&state.sx1262.irq_pending))
         {
             (void)service_radio_irq(&state, &state.sx1262);
         }
-        if (state.sx1268.irq_pending)
+        if (atomic_load(&state.sx1268.irq_pending))
         {
             (void)service_radio_irq(&state, &state.sx1268);
         }
