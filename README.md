@@ -24,6 +24,10 @@ The stack is intentionally simple, modular, and easy to reason about, while rema
 - Receives or replays telemetry, writes it to a local durable queue, and
   forwards it to the lab-hosted ingest API.
 - Keeps local durability during connectivity loss.
+- Supports either:
+  - replay RF input in Python
+  - a native SX126x receiver process that feeds raw RF frames to Python over a
+    local Unix domain socket
 
 ---
 

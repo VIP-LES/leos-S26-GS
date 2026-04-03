@@ -11,10 +11,11 @@ load_dotenv()
 import uvicorn  # noqa: E402 — must import after load_dotenv
 
 from src import db  # noqa: E402
-from src.fake_radio import run_fake_radio  # noqa: E402
+from src.native_radio import run_native_radio  # noqa: E402
 from src.forwarder import run_forwarder  # noqa: E402
 from src.ingest_api import app  # noqa: E402
 from src.queue_writer import init_queue  # noqa: E402
+from src.replay_radio import run_replay_radio  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,27 +48,47 @@ def run_lab_mode() -> None:
 def run_pi_mode() -> None:
     queue_path = os.environ.get("SPOOL_DB_PATH", "/home/pi/leos-state/spool.db")
     ingest_url = os.environ.get("INGEST_URL", "http://localhost:4000")
-    fake_input_path = os.environ.get("FAKE_RADIO_INPUT_PATH")
-    fake_repeat = os.environ.get("FAKE_RADIO_REPEAT", "false").lower() == "true"
-    fake_interval_s = float(os.environ.get("FAKE_RADIO_INTERVAL_S", "0"))
+    radio_source = os.environ.get("RADIO_SOURCE", "replay").strip().lower()
+    replay_input_path = os.environ.get("REPLAY_RADIO_INPUT_PATH")
+    replay_repeat = os.environ.get("REPLAY_RADIO_REPEAT", "false").lower() == "true"
+    replay_interval_s = float(os.environ.get("REPLAY_RADIO_INTERVAL_S", "0"))
+    radio_socket_path = os.environ.get("RADIO_SOCKET_PATH", "/tmp/leos-radio.sock")
+    radio_receiver_bin = os.environ.get(
+        "RADIO_RECEIVER_BIN",
+        "/home/pi/leos-S26-ground-station/native/build/radio_receiver",
+    )
+    radio_autostart = os.environ.get("RADIO_RECEIVER_AUTOSTART", "true").lower() == "true"
 
     init_queue(queue_path)
 
-    if fake_input_path:
-        fake_thread = threading.Thread(
-            target=run_fake_radio,
+    if radio_source == "replay" and replay_input_path:
+        producer_thread = threading.Thread(
+            target=run_replay_radio,
             kwargs={
                 "queue_path": queue_path,
-                "input_path": fake_input_path,
-                "repeat": fake_repeat,
-                "interval_s": fake_interval_s,
+                "input_path": replay_input_path,
+                "repeat": replay_repeat,
+                "interval_s": replay_interval_s,
             },
             daemon=True,
         )
-        fake_thread.start()
-        logger.info("Fake radio replay started from %s", fake_input_path)
+        producer_thread.start()
+        logger.info("Replay radio source started from %s", replay_input_path)
+    elif radio_source == "native":
+        producer_thread = threading.Thread(
+            target=run_native_radio,
+            kwargs={
+                "queue_path": queue_path,
+                "socket_path": radio_socket_path,
+                "receiver_bin": radio_receiver_bin,
+                "autostart": radio_autostart,
+            },
+            daemon=True,
+        )
+        producer_thread.start()
+        logger.info("Native radio receiver started via %s", radio_socket_path)
     else:
-        logger.info("Pi mode started without fake radio input; forwarder will idle")
+        logger.info("Pi mode started without an active radio source; forwarder will idle")
 
     run_forwarder(queue_path, ingest_url)
 

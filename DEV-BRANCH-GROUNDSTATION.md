@@ -13,7 +13,8 @@ The ground-station app has been refactored toward the intended split:
 - Pi side:
   - durable SQLite queue
   - forwarder
-  - fake/replay telemetry source for hardware-free testing
+  - replay telemetry source for hardware-free testing
+  - native SX126x Linux receiver option over local Unix socket IPC
 - Lab side:
   - ingest API
   - TimescaleDB
@@ -39,7 +40,9 @@ Lab mode:
 Pi mode:
 
 - initializes the SQLite spool queue
-- optionally starts a fake/replay telemetry source
+- optionally starts either:
+  - a replay telemetry source
+  - the native SX126x receiver process
 - runs the forwarder that ships queued payloads to the lab ingest API
 
 This replaces the previous design where one process started both the API and the
@@ -106,9 +109,9 @@ Important note:
 - they may need adjustment once the final DSDL field definitions are fully
   finalized upstream
 
-### 7. Fake/Replay Telemetry Source Added
+### 7. Replay Telemetry Source Added
 
-`src/fake_radio.py` provides a hardware-free Pi-side source for testing.
+`src/replay_radio.py` provides a hardware-free Pi-side source for testing.
 
 It can:
 
@@ -128,6 +131,25 @@ This lets us test:
 - ingest
 
 without the physical radio hardware connected.
+
+### 7b. Native Linux Radio Receiver Added
+
+This branch now also includes a native C receiver process under:
+
+- `native/radio_receiver.c`
+
+That process:
+
+- links against the shared `leos_sx126x` radio library sources
+- uses the Linux SX126x port in `leos-sdk`
+- watches DIO1 GPIO edges on the Pi
+- drains complete RF packets from the radios
+- forwards them to Python over a local `AF_UNIX` `SOCK_SEQPACKET` socket
+
+The Python Pi-mode process can now choose between:
+
+- `RADIO_SOURCE=replay`
+- `RADIO_SOURCE=native`
 
 ### 8. Old Watcher/Parser Pipeline Removed
 
@@ -155,9 +177,13 @@ This keeps the queue, forwarder, and ingest API aligned on one payload contract.
 
 - `GROUNDSTATION_MODE`
 - `SPOOL_DB_PATH`
-- `FAKE_RADIO_INPUT_PATH`
-- `FAKE_RADIO_REPEAT`
-- `FAKE_RADIO_INTERVAL_S`
+- `RADIO_SOURCE`
+- `REPLAY_RADIO_INPUT_PATH`
+- `REPLAY_RADIO_REPEAT`
+- `REPLAY_RADIO_INTERVAL_S`
+- `RADIO_SOCKET_PATH`
+- `RADIO_RECEIVER_BIN`
+- `RADIO_RECEIVER_AUTOSTART`
 
 ### 11. Grafana Dashboard Updated for Both Hypertables
 
@@ -211,7 +237,5 @@ See the infra repo's dev-branch README for deployment-side details.
 
 The following is intentionally not complete in this branch:
 
-- `radio_receiver.py`
-- real SPI/radio integration on the Pi
 - final field-level adjustment of RF payload contents once the upstream DSDL
   contract is locked down
