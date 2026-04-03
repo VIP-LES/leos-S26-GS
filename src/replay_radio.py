@@ -1,4 +1,4 @@
-"""Fake/replay telemetry source for Pi-mode testing without hardware."""
+"""Replay telemetry source for Pi-mode testing without hardware."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _decode_record(line: str) -> tuple[str, dict]:
     return decode_hex_frame_to_ingest_payload(line)
 
 
-def run_fake_radio(
+def run_replay_radio(
     queue_path: str,
     input_path: str,
     *,
