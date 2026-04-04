@@ -3,6 +3,7 @@
 import os
 import threading
 import logging
+import time
 
 from dotenv import load_dotenv
 
@@ -48,6 +49,7 @@ def run_lab_mode() -> None:
 def run_pi_mode() -> None:
     queue_path = os.environ.get("SPOOL_DB_PATH", "/home/pi/leos-state/spool.db")
     ingest_url = os.environ.get("INGEST_URL", "http://localhost:4000")
+    pi_local_only = os.environ.get("GROUNDSTATION_PI_LOCAL_ONLY", "false").lower() == "true"
     radio_source = os.environ.get("RADIO_SOURCE", "replay").strip().lower()
     replay_input_path = os.environ.get("REPLAY_RADIO_INPUT_PATH")
     replay_repeat = os.environ.get("REPLAY_RADIO_REPEAT", "false").lower() == "true"
@@ -59,6 +61,7 @@ def run_pi_mode() -> None:
     )
     radio_autostart = os.environ.get("RADIO_RECEIVER_AUTOSTART", "true").lower() == "true"
 
+    producer_thread = None
     init_queue(queue_path)
 
     if radio_source == "replay" and replay_input_path:
@@ -89,6 +92,15 @@ def run_pi_mode() -> None:
         logger.info("Native radio receiver started via %s", radio_socket_path)
     else:
         logger.info("Pi mode started without an active radio source; forwarder will idle")
+
+    if pi_local_only:
+        logger.info("Pi local-only mode enabled; telemetry will remain in local SQLite at %s", queue_path)
+        if producer_thread is not None:
+            producer_thread.join()
+            return
+
+        while True:
+            time.sleep(1.0)
 
     run_forwarder(queue_path, ingest_url)
 

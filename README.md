@@ -28,6 +28,22 @@ The stack is intentionally simple, modular, and easy to reason about, while rema
   - replay RF input in Python
   - a native SX126x receiver process that feeds raw RF frames to Python over a
     local Unix domain socket
+  - selective radio enablement via `RADIO_ENABLED=sx1262|sx1268|both`
+
+### Tethered SX1262-Only Test
+
+For the preliminary payload-to-ground-station test, keep the Pi pipeline the
+same and simply run the native receiver with:
+
+```bash
+export GROUNDSTATION_MODE=pi
+export RADIO_SOURCE=native
+export RADIO_ENABLED=sx1262
+```
+
+That keeps the durable queue, forwarder, ingest API, database, and Grafana flow
+unchanged while preventing the native receiver from trying to initialize the
+unwired SX1268.
 
 ---
 
