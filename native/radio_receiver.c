@@ -47,6 +47,8 @@ typedef struct
     const char *spi_device;
     const char *gpio_chip_path;
     uint32_t spi_baud_hz;
+    bool sx1262_enabled;
+    bool sx1268_enabled;
     uint32_t sx1262_nss;
     uint32_t sx1262_busy;
     uint32_t sx1262_reset;
@@ -114,10 +116,30 @@ static const char *env_str(const char *name, const char *fallback)
 
 static void load_config(app_config_t *cfg)
 {
+    const char *radio_enabled;
+
     cfg->socket_path = env_str("RADIO_SOCKET_PATH", DEFAULT_SOCKET_PATH);
     cfg->spi_device = env_str("RADIO_SPI_DEVICE", DEFAULT_SPI_DEVICE);
     cfg->gpio_chip_path = env_str("RADIO_GPIO_CHIP", DEFAULT_GPIO_CHIP);
     cfg->spi_baud_hz = env_u32("RADIO_SPI_BAUD_HZ", DEFAULT_SPI_BAUD_HZ);
+    cfg->sx1262_enabled = true;
+    cfg->sx1268_enabled = true;
+
+    radio_enabled = env_str("RADIO_ENABLED", "both");
+    if (strcmp(radio_enabled, "sx1262") == 0)
+    {
+        cfg->sx1268_enabled = false;
+    }
+    else if (strcmp(radio_enabled, "sx1268") == 0)
+    {
+        cfg->sx1262_enabled = false;
+    }
+    else if (strcmp(radio_enabled, "both") != 0)
+    {
+        fprintf(stderr,
+                "radio_receiver: unsupported RADIO_ENABLED=%s, defaulting to both\n",
+                radio_enabled);
+    }
 
     cfg->sx1262_nss = env_u32("RADIO_SX1262_NSS_LINE", DEFAULT_SX1262_NSS);
     cfg->sx1262_busy = env_u32("RADIO_SX1262_BUSY_LINE", DEFAULT_SX1262_BUSY);
@@ -271,9 +293,24 @@ static int emit_rx_packet(app_state_t *state, leos_radio_t radio)
     return send_ipc_message(state, message, rx_len + 2u);
 }
 
+static bool radio_is_enabled(const app_state_t *state, leos_radio_t radio)
+{
+    if (radio == LEOS_RADIO_SX1262)
+    {
+        return state->config.sx1262_enabled;
+    }
+
+    return state->config.sx1268_enabled;
+}
+
 static int service_radio_irq(app_state_t *state, radio_state_t *radio)
 {
     leos_radio_status_t status;
+
+    if (!radio_is_enabled(state, radio->radio))
+    {
+        return 0;
+    }
 
     atomic_store(&radio->irq_pending, false);
     leos_sx126x_handle_dio1_irq(radio->radio);
@@ -385,12 +422,24 @@ static void drain_irq_pipe(app_state_t *state)
 static void *irq_thread_main(void *arg)
 {
     app_state_t *state = (app_state_t *)arg;
-    int sx1262_fd = gpiod_line_event_get_fd(state->sx1262.dio1_line);
-    int sx1268_fd = gpiod_line_event_get_fd(state->sx1268.dio1_line);
+    int sx1262_fd = -1;
+    int sx1268_fd = -1;
+
+    if ((state->sx1262.dio1_line != NULL) && state->config.sx1262_enabled)
+    {
+        sx1262_fd = gpiod_line_event_get_fd(state->sx1262.dio1_line);
+    }
+    if ((state->sx1268.dio1_line != NULL) && state->config.sx1268_enabled)
+    {
+        sx1268_fd = gpiod_line_event_get_fd(state->sx1268.dio1_line);
+    }
 
     for (;;)
     {
         struct pollfd fds[2];
+        int sx1262_index = -1;
+        int sx1268_index = -1;
+        nfds_t nfds = 0u;
         int poll_rc;
 
         if (atomic_load(&state->stop_requested))
@@ -398,20 +447,37 @@ static void *irq_thread_main(void *arg)
             break;
         }
 
-        fds[0].fd = sx1262_fd;
-        fds[0].events = POLLIN;
-        fds[0].revents = 0;
-        fds[1].fd = sx1268_fd;
-        fds[1].events = POLLIN;
-        fds[1].revents = 0;
+        if (sx1262_fd >= 0)
+        {
+            sx1262_index = (int)nfds;
+            fds[nfds].fd = sx1262_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
 
-        poll_rc = poll(fds, 2, 100);
+        if (sx1268_fd >= 0)
+        {
+            sx1268_index = (int)nfds;
+            fds[nfds].fd = sx1268_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+
+        if (nfds == 0u)
+        {
+            usleep(100000);
+            continue;
+        }
+
+        poll_rc = poll(fds, nfds, 100);
         if (poll_rc <= 0)
         {
             continue;
         }
 
-        if ((fds[0].revents & POLLIN) != 0)
+        if ((sx1262_index >= 0) && ((fds[sx1262_index].revents & POLLIN) != 0))
         {
             struct gpiod_line_event event;
             if (gpiod_line_event_read(state->sx1262.dio1_line, &event) == 0)
@@ -421,7 +487,7 @@ static void *irq_thread_main(void *arg)
             }
         }
 
-        if ((fds[1].revents & POLLIN) != 0)
+        if ((sx1268_index >= 0) && ((fds[sx1268_index].revents & POLLIN) != 0))
         {
             struct gpiod_line_event event;
             if (gpiod_line_event_read(state->sx1268.dio1_line, &event) == 0)
@@ -438,6 +504,11 @@ static void *irq_thread_main(void *arg)
 static int init_state(app_state_t *state)
 {
     int irq_pipe_fds[2];
+
+    if (!state->config.sx1262_enabled && !state->config.sx1268_enabled)
+    {
+        return -1;
+    }
 
     state->spi_fd = open_spi_device(state->config.spi_device);
     if (state->spi_fd < 0)
@@ -465,11 +536,11 @@ static int init_state(app_state_t *state)
     build_radio_config(LEOS_RADIO_SX1262, &state->sx1262.cfg);
     build_radio_config(LEOS_RADIO_SX1268, &state->sx1268.cfg);
 
-    if (request_dio1_line(state, &state->sx1262) != 0)
+    if (state->config.sx1262_enabled && (request_dio1_line(state, &state->sx1262) != 0))
     {
         return -1;
     }
-    if (request_dio1_line(state, &state->sx1268) != 0)
+    if (state->config.sx1268_enabled && (request_dio1_line(state, &state->sx1268) != 0))
     {
         return -1;
     }
@@ -482,19 +553,21 @@ static int init_state(app_state_t *state)
     state->irq_pipe_write_fd = irq_pipe_fds[1];
     (void)fcntl(state->irq_pipe_read_fd, F_SETFL, O_NONBLOCK);
 
-    if (leos_sx126x_init(LEOS_RADIO_SX1262, &state->sx1262.hw, &state->sx1262.cfg) != LEOS_RADIO_OK)
+    if (state->config.sx1262_enabled &&
+        (leos_sx126x_init(LEOS_RADIO_SX1262, &state->sx1262.hw, &state->sx1262.cfg) != LEOS_RADIO_OK))
     {
         return -1;
     }
-    if (leos_sx126x_init(LEOS_RADIO_SX1268, &state->sx1268.hw, &state->sx1268.cfg) != LEOS_RADIO_OK)
+    if (state->config.sx1268_enabled &&
+        (leos_sx126x_init(LEOS_RADIO_SX1268, &state->sx1268.hw, &state->sx1268.cfg) != LEOS_RADIO_OK))
     {
         return -1;
     }
-    if (leos_sx126x_start_rx(LEOS_RADIO_SX1262) != LEOS_RADIO_OK)
+    if (state->config.sx1262_enabled && (leos_sx126x_start_rx(LEOS_RADIO_SX1262) != LEOS_RADIO_OK))
     {
         return -1;
     }
-    if (leos_sx126x_start_rx(LEOS_RADIO_SX1268) != LEOS_RADIO_OK)
+    if (state->config.sx1268_enabled && (leos_sx126x_start_rx(LEOS_RADIO_SX1268) != LEOS_RADIO_OK))
     {
         return -1;
     }
