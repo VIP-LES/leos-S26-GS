@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -482,6 +483,27 @@ static void drain_irq_pipe(app_state_t *state)
     }
 }
 
+static void sleep_for_us(long usec)
+{
+    struct timespec req;
+
+    if (usec <= 0)
+    {
+        return;
+    }
+
+    req.tv_sec = usec / 1000000L;
+    req.tv_nsec = (usec % 1000000L) * 1000L;
+
+    while (nanosleep(&req, &req) != 0)
+    {
+        if (errno != EINTR)
+        {
+            break;
+        }
+    }
+}
+
 static void *irq_thread_main(void *arg)
 {
     app_state_t *state = (app_state_t *)arg;
@@ -530,7 +552,7 @@ static void *irq_thread_main(void *arg)
 
         if (nfds == 0u)
         {
-            usleep(100000);
+            sleep_for_us(100000L);
             continue;
         }
 
