@@ -35,13 +35,12 @@
 
 #define DEFAULT_SX1262_NSS    13u
 #define DEFAULT_SX1262_BUSY   19u
-#define DEFAULT_SX1262_RESET  15u
 #define DEFAULT_SX1262_DIO1   17u
 
 #define DEFAULT_SX1268_NSS    14u
 #define DEFAULT_SX1268_BUSY   18u
-#define DEFAULT_SX1268_RESET  15u
 #define DEFAULT_SX1268_DIO1   16u
+#define DEFAULT_RESET_LINE    15u
 
 typedef struct
 {
@@ -52,13 +51,12 @@ typedef struct
     uint32_t spi_baud_hz;
     bool sx1262_enabled;
     bool sx1268_enabled;
+    uint32_t reset_line;
     uint32_t sx1262_nss;
     uint32_t sx1262_busy;
-    uint32_t sx1262_reset;
     uint32_t sx1262_dio1;
     uint32_t sx1268_nss;
     uint32_t sx1268_busy;
-    uint32_t sx1268_reset;
     uint32_t sx1268_dio1;
 } app_config_t;
 
@@ -187,14 +185,13 @@ static void load_config(app_config_t *cfg)
                 radio_enabled);
     }
 
+    cfg->reset_line = env_u32("RADIO_RESET_LINE", DEFAULT_RESET_LINE);
     cfg->sx1262_nss = env_u32("RADIO_SX1262_NSS_LINE", DEFAULT_SX1262_NSS);
     cfg->sx1262_busy = env_u32("RADIO_SX1262_BUSY_LINE", DEFAULT_SX1262_BUSY);
-    cfg->sx1262_reset = env_u32("RADIO_SX1262_RESET_LINE", DEFAULT_SX1262_RESET);
     cfg->sx1262_dio1 = env_u32("RADIO_SX1262_DIO1_LINE", DEFAULT_SX1262_DIO1);
 
     cfg->sx1268_nss = env_u32("RADIO_SX1268_NSS_LINE", DEFAULT_SX1268_NSS);
     cfg->sx1268_busy = env_u32("RADIO_SX1268_BUSY_LINE", DEFAULT_SX1268_BUSY);
-    cfg->sx1268_reset = env_u32("RADIO_SX1268_RESET_LINE", DEFAULT_SX1268_RESET);
     cfg->sx1268_dio1 = env_u32("RADIO_SX1268_DIO1_LINE", DEFAULT_SX1268_DIO1);
 }
 
@@ -233,13 +230,13 @@ static void build_radio_hw(app_state_t *state, radio_state_t *radio)
     radio->hw.pin_sck = 10u;
     radio->hw.pin_mosi = 11u;
     radio->hw.pin_miso = 12u;
+    radio->hw.pin_reset = state->config.reset_line;
 
     if (radio->radio == LEOS_RADIO_SX1262)
     {
         radio->hw.platform_spi = &state->sx1262_spi_fd;
         radio->hw.pin_nss = state->config.sx1262_nss;
         radio->hw.pin_busy = state->config.sx1262_busy;
-        radio->hw.pin_reset = state->config.sx1262_reset;
         radio->hw.pin_dio1 = state->config.sx1262_dio1;
     }
     else
@@ -247,7 +244,6 @@ static void build_radio_hw(app_state_t *state, radio_state_t *radio)
         radio->hw.platform_spi = &state->sx1268_spi_fd;
         radio->hw.pin_nss = state->config.sx1268_nss;
         radio->hw.pin_busy = state->config.sx1268_busy;
-        radio->hw.pin_reset = state->config.sx1268_reset;
         radio->hw.pin_dio1 = state->config.sx1268_dio1;
     }
 }
