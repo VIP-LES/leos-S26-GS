@@ -90,6 +90,41 @@ static void log_error(const char *message)
     fprintf(stderr, "radio_receiver: %s\n", message);
 }
 
+static void log_errno_message(const char *context)
+{
+    int err = errno;
+
+    fprintf(stderr, "radio_receiver: %s: %s (errno=%d)\n", context, strerror(err), err);
+}
+
+static const char *radio_name(leos_radio_t radio)
+{
+    return (radio == LEOS_RADIO_SX1268) ? "sx1268" : "sx1262";
+}
+
+static const char *radio_status_name(leos_radio_status_t status)
+{
+    switch (status)
+    {
+        case LEOS_RADIO_OK:
+            return "LEOS_RADIO_OK";
+        case LEOS_RADIO_ERR_ARG:
+            return "LEOS_RADIO_ERR_ARG";
+        case LEOS_RADIO_ERR_STATE:
+            return "LEOS_RADIO_ERR_STATE";
+        case LEOS_RADIO_ERR_IO:
+            return "LEOS_RADIO_ERR_IO";
+        case LEOS_RADIO_ERR_TIMEOUT:
+            return "LEOS_RADIO_ERR_TIMEOUT";
+        case LEOS_RADIO_ERR_BUSY:
+            return "LEOS_RADIO_ERR_BUSY";
+        case LEOS_RADIO_ERR_DRIVER:
+            return "LEOS_RADIO_ERR_DRIVER";
+        default:
+            return "LEOS_RADIO_ERR_UNKNOWN";
+    }
+}
+
 static uint32_t env_u32(const char *name, uint32_t fallback)
 {
     const char *value = getenv(name);
@@ -591,27 +626,41 @@ static void *irq_thread_main(void *arg)
 static int init_state(app_state_t *state)
 {
     int irq_pipe_fds[2];
+    leos_radio_status_t status;
 
     if (!state->config.sx1262_enabled && !state->config.sx1268_enabled)
     {
+        log_error("init_state: no radios enabled after config parsing");
         return -1;
     }
 
     state->spi_fd = open_spi_device(state->config.spi_device);
     if (state->spi_fd < 0)
     {
+        fprintf(stderr,
+                "radio_receiver: init_state: failed to open SPI device %s\n",
+                state->config.spi_device);
+        log_errno_message("init_state SPI open");
         return -1;
     }
 
     state->server_fd = open_server_socket(state->config.socket_path);
     if (state->server_fd < 0)
     {
+        fprintf(stderr,
+                "radio_receiver: init_state: failed to open server socket %s\n",
+                state->config.socket_path);
+        log_errno_message("init_state socket setup");
         return -1;
     }
 
     state->gpio_chip = gpiod_chip_open(state->config.gpio_chip_path);
     if (state->gpio_chip == NULL)
     {
+        fprintf(stderr,
+                "radio_receiver: init_state: failed to open GPIO chip %s\n",
+                state->config.gpio_chip_path);
+        log_errno_message("init_state GPIO chip open");
         return -1;
     }
 
@@ -625,42 +674,88 @@ static int init_state(app_state_t *state)
 
     if (state->config.sx1262_enabled && (request_dio1_line(state, &state->sx1262) != 0))
     {
+        fprintf(stderr,
+                "radio_receiver: init_state: failed to request DIO1 line %u for %s\n",
+                state->sx1262.hw.pin_dio1,
+                radio_name(state->sx1262.radio));
+        log_errno_message("init_state DIO1 request");
         return -1;
     }
     if (state->config.sx1268_enabled && (request_dio1_line(state, &state->sx1268) != 0))
     {
+        fprintf(stderr,
+                "radio_receiver: init_state: failed to request DIO1 line %u for %s\n",
+                state->sx1268.hw.pin_dio1,
+                radio_name(state->sx1268.radio));
+        log_errno_message("init_state DIO1 request");
         return -1;
     }
 
     if (pipe(irq_pipe_fds) != 0)
     {
+        log_errno_message("init_state IRQ pipe creation");
         return -1;
     }
     state->irq_pipe_read_fd = irq_pipe_fds[0];
     state->irq_pipe_write_fd = irq_pipe_fds[1];
     (void)fcntl(state->irq_pipe_read_fd, F_SETFL, O_NONBLOCK);
 
-    if (state->config.sx1262_enabled &&
-        (leos_sx126x_init(LEOS_RADIO_SX1262, &state->sx1262.hw, &state->sx1262.cfg) != LEOS_RADIO_OK))
+    if (state->config.sx1262_enabled)
     {
-        return -1;
+        status = leos_sx126x_init(LEOS_RADIO_SX1262, &state->sx1262.hw, &state->sx1262.cfg);
+        if (status != LEOS_RADIO_OK)
+        {
+            fprintf(stderr,
+                    "radio_receiver: init_state: leos_sx126x_init(%s) failed with %s (%d)\n",
+                    radio_name(LEOS_RADIO_SX1262),
+                    radio_status_name(status),
+                    (int)status);
+            return -1;
+        }
     }
-    if (state->config.sx1268_enabled &&
-        (leos_sx126x_init(LEOS_RADIO_SX1268, &state->sx1268.hw, &state->sx1268.cfg) != LEOS_RADIO_OK))
+    if (state->config.sx1268_enabled)
     {
-        return -1;
+        status = leos_sx126x_init(LEOS_RADIO_SX1268, &state->sx1268.hw, &state->sx1268.cfg);
+        if (status != LEOS_RADIO_OK)
+        {
+            fprintf(stderr,
+                    "radio_receiver: init_state: leos_sx126x_init(%s) failed with %s (%d)\n",
+                    radio_name(LEOS_RADIO_SX1268),
+                    radio_status_name(status),
+                    (int)status);
+            return -1;
+        }
     }
-    if (state->config.sx1262_enabled && (leos_sx126x_start_rx(LEOS_RADIO_SX1262) != LEOS_RADIO_OK))
+    if (state->config.sx1262_enabled)
     {
-        return -1;
+        status = leos_sx126x_start_rx(LEOS_RADIO_SX1262);
+        if (status != LEOS_RADIO_OK)
+        {
+            fprintf(stderr,
+                    "radio_receiver: init_state: leos_sx126x_start_rx(%s) failed with %s (%d)\n",
+                    radio_name(LEOS_RADIO_SX1262),
+                    radio_status_name(status),
+                    (int)status);
+            return -1;
+        }
     }
-    if (state->config.sx1268_enabled && (leos_sx126x_start_rx(LEOS_RADIO_SX1268) != LEOS_RADIO_OK))
+    if (state->config.sx1268_enabled)
     {
-        return -1;
+        status = leos_sx126x_start_rx(LEOS_RADIO_SX1268);
+        if (status != LEOS_RADIO_OK)
+        {
+            fprintf(stderr,
+                    "radio_receiver: init_state: leos_sx126x_start_rx(%s) failed with %s (%d)\n",
+                    radio_name(LEOS_RADIO_SX1268),
+                    radio_status_name(status),
+                    (int)status);
+            return -1;
+        }
     }
 
     if (pthread_create(&state->irq_thread, NULL, irq_thread_main, state) != 0)
     {
+        log_errno_message("init_state IRQ thread creation");
         return -1;
     }
 
