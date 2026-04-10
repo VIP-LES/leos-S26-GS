@@ -90,6 +90,11 @@ static void log_error(const char *message)
     fprintf(stderr, "radio_receiver: %s\n", message);
 }
 
+static void log_info(const char *message)
+{
+    fprintf(stderr, "radio_receiver: %s\n", message);
+}
+
 static void log_errno_message(const char *context)
 {
     int err = errno;
@@ -712,6 +717,15 @@ static int init_state(app_state_t *state)
                     (int)status);
             return -1;
         }
+        fprintf(stderr,
+                "radio_receiver: init_state: leos_sx126x_init(%s) succeeded"
+                " [spi=%s nss=%u busy=%u reset=%u dio1=%u]\n",
+                radio_name(LEOS_RADIO_SX1262),
+                state->config.spi_device,
+                state->sx1262.hw.pin_nss,
+                state->sx1262.hw.pin_busy,
+                state->sx1262.hw.pin_reset,
+                state->sx1262.hw.pin_dio1);
     }
     if (state->config.sx1268_enabled)
     {
@@ -725,6 +739,15 @@ static int init_state(app_state_t *state)
                     (int)status);
             return -1;
         }
+        fprintf(stderr,
+                "radio_receiver: init_state: leos_sx126x_init(%s) succeeded"
+                " [spi=%s nss=%u busy=%u reset=%u dio1=%u]\n",
+                radio_name(LEOS_RADIO_SX1268),
+                state->config.spi_device,
+                state->sx1268.hw.pin_nss,
+                state->sx1268.hw.pin_busy,
+                state->sx1268.hw.pin_reset,
+                state->sx1268.hw.pin_dio1);
     }
     if (state->config.sx1262_enabled)
     {
@@ -738,6 +761,9 @@ static int init_state(app_state_t *state)
                     (int)status);
             return -1;
         }
+        fprintf(stderr,
+                "radio_receiver: init_state: leos_sx126x_start_rx(%s) succeeded\n",
+                radio_name(LEOS_RADIO_SX1262));
     }
     if (state->config.sx1268_enabled)
     {
@@ -751,6 +777,9 @@ static int init_state(app_state_t *state)
                     (int)status);
             return -1;
         }
+        fprintf(stderr,
+                "radio_receiver: init_state: leos_sx126x_start_rx(%s) succeeded\n",
+                radio_name(LEOS_RADIO_SX1268));
     }
 
     if (pthread_create(&state->irq_thread, NULL, irq_thread_main, state) != 0)
@@ -758,6 +787,8 @@ static int init_state(app_state_t *state)
         log_errno_message("init_state IRQ thread creation");
         return -1;
     }
+
+    log_info("init_state: startup completed successfully");
 
     return 0;
 }
