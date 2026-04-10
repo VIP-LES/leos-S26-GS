@@ -28,7 +28,8 @@
 #define IPC_TX_STATUS_RADIO_ERROR  0x02u
 
 #define DEFAULT_SOCKET_PATH   "/tmp/leos-radio.sock"
-#define DEFAULT_SPI_DEVICE    "/dev/spidev0.1"
+#define DEFAULT_SX1262_SPI_DEVICE "/dev/spidev0.0"
+#define DEFAULT_SX1268_SPI_DEVICE "/dev/spidev0.1"
 #define DEFAULT_GPIO_CHIP     "/dev/gpiochip0"
 #define DEFAULT_SPI_BAUD_HZ   8000000u
 
@@ -45,7 +46,8 @@
 typedef struct
 {
     const char *socket_path;
-    const char *spi_device;
+    const char *sx1262_spi_device;
+    const char *sx1268_spi_device;
     const char *gpio_chip_path;
     uint32_t spi_baud_hz;
     bool sx1262_enabled;
@@ -73,7 +75,8 @@ typedef struct
 typedef struct
 {
     app_config_t config;
-    int spi_fd;
+    int sx1262_spi_fd;
+    int sx1268_spi_fd;
     int server_fd;
     int client_fd;
     int irq_pipe_read_fd;
@@ -161,7 +164,8 @@ static void load_config(app_config_t *cfg)
     const char *radio_enabled;
 
     cfg->socket_path = env_str("RADIO_SOCKET_PATH", DEFAULT_SOCKET_PATH);
-    cfg->spi_device = env_str("RADIO_SPI_DEVICE", DEFAULT_SPI_DEVICE);
+    cfg->sx1262_spi_device = env_str("RADIO_SX1262_SPI_DEVICE", DEFAULT_SX1262_SPI_DEVICE);
+    cfg->sx1268_spi_device = env_str("RADIO_SX1268_SPI_DEVICE", DEFAULT_SX1268_SPI_DEVICE);
     cfg->gpio_chip_path = env_str("RADIO_GPIO_CHIP", DEFAULT_GPIO_CHIP);
     cfg->spi_baud_hz = env_u32("RADIO_SPI_BAUD_HZ", DEFAULT_SPI_BAUD_HZ);
     cfg->sx1262_enabled = true;
@@ -225,7 +229,6 @@ static void build_radio_config(leos_radio_t radio, leos_radio_config_t *cfg)
 static void build_radio_hw(app_state_t *state, radio_state_t *radio)
 {
     memset(&radio->hw, 0, sizeof(radio->hw));
-    radio->hw.platform_spi = &state->spi_fd;
     radio->hw.spi_baud_hz = state->config.spi_baud_hz;
     radio->hw.pin_sck = 10u;
     radio->hw.pin_mosi = 11u;
@@ -233,6 +236,7 @@ static void build_radio_hw(app_state_t *state, radio_state_t *radio)
 
     if (radio->radio == LEOS_RADIO_SX1262)
     {
+        radio->hw.platform_spi = &state->sx1262_spi_fd;
         radio->hw.pin_nss = state->config.sx1262_nss;
         radio->hw.pin_busy = state->config.sx1262_busy;
         radio->hw.pin_reset = state->config.sx1262_reset;
@@ -240,6 +244,7 @@ static void build_radio_hw(app_state_t *state, radio_state_t *radio)
     }
     else
     {
+        radio->hw.platform_spi = &state->sx1268_spi_fd;
         radio->hw.pin_nss = state->config.sx1268_nss;
         radio->hw.pin_busy = state->config.sx1268_busy;
         radio->hw.pin_reset = state->config.sx1268_reset;
@@ -250,6 +255,16 @@ static void build_radio_hw(app_state_t *state, radio_state_t *radio)
 static int open_spi_device(const char *path)
 {
     return open(path, O_RDWR | O_CLOEXEC);
+}
+
+static const char *radio_spi_device_path(const app_state_t *state, leos_radio_t radio)
+{
+    if (radio == LEOS_RADIO_SX1262)
+    {
+        return state->config.sx1262_spi_device;
+    }
+
+    return state->config.sx1268_spi_device;
 }
 
 static int open_server_socket(const char *path)
@@ -639,14 +654,32 @@ static int init_state(app_state_t *state)
         return -1;
     }
 
-    state->spi_fd = open_spi_device(state->config.spi_device);
-    if (state->spi_fd < 0)
+    if (state->config.sx1262_enabled)
     {
-        fprintf(stderr,
-                "radio_receiver: init_state: failed to open SPI device %s\n",
-                state->config.spi_device);
-        log_errno_message("init_state SPI open");
-        return -1;
+        state->sx1262_spi_fd = open_spi_device(state->config.sx1262_spi_device);
+        if (state->sx1262_spi_fd < 0)
+        {
+            fprintf(stderr,
+                    "radio_receiver: init_state: failed to open SPI device %s for %s\n",
+                    state->config.sx1262_spi_device,
+                    radio_name(LEOS_RADIO_SX1262));
+            log_errno_message("init_state SPI open");
+            return -1;
+        }
+    }
+
+    if (state->config.sx1268_enabled)
+    {
+        state->sx1268_spi_fd = open_spi_device(state->config.sx1268_spi_device);
+        if (state->sx1268_spi_fd < 0)
+        {
+            fprintf(stderr,
+                    "radio_receiver: init_state: failed to open SPI device %s for %s\n",
+                    state->config.sx1268_spi_device,
+                    radio_name(LEOS_RADIO_SX1268));
+            log_errno_message("init_state SPI open");
+            return -1;
+        }
     }
 
     state->server_fd = open_server_socket(state->config.socket_path);
@@ -721,7 +754,7 @@ static int init_state(app_state_t *state)
                 "radio_receiver: init_state: leos_sx126x_init(%s) succeeded"
                 " [spi=%s nss=%u busy=%u reset=%u dio1=%u]\n",
                 radio_name(LEOS_RADIO_SX1262),
-                state->config.spi_device,
+                radio_spi_device_path(state, LEOS_RADIO_SX1262),
                 state->sx1262.hw.pin_nss,
                 state->sx1262.hw.pin_busy,
                 state->sx1262.hw.pin_reset,
@@ -743,7 +776,7 @@ static int init_state(app_state_t *state)
                 "radio_receiver: init_state: leos_sx126x_init(%s) succeeded"
                 " [spi=%s nss=%u busy=%u reset=%u dio1=%u]\n",
                 radio_name(LEOS_RADIO_SX1268),
-                state->config.spi_device,
+                radio_spi_device_path(state, LEOS_RADIO_SX1268),
                 state->sx1268.hw.pin_nss,
                 state->sx1268.hw.pin_busy,
                 state->sx1268.hw.pin_reset,
@@ -848,10 +881,15 @@ static void cleanup_state(app_state_t *state)
         close(state->irq_pipe_write_fd);
         state->irq_pipe_write_fd = -1;
     }
-    if (state->spi_fd >= 0)
+    if (state->sx1262_spi_fd >= 0)
     {
-        close(state->spi_fd);
-        state->spi_fd = -1;
+        close(state->sx1262_spi_fd);
+        state->sx1262_spi_fd = -1;
+    }
+    if (state->sx1268_spi_fd >= 0)
+    {
+        close(state->sx1268_spi_fd);
+        state->sx1268_spi_fd = -1;
     }
 }
 
@@ -860,7 +898,8 @@ int main(void)
     app_state_t state;
 
     memset(&state, 0, sizeof(state));
-    state.spi_fd = -1;
+    state.sx1262_spi_fd = -1;
+    state.sx1268_spi_fd = -1;
     state.server_fd = -1;
     state.client_fd = -1;
     state.irq_pipe_read_fd = -1;
