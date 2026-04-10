@@ -28,7 +28,7 @@
 #define IPC_TX_STATUS_RADIO_ERROR  0x02u
 
 #define DEFAULT_SOCKET_PATH   "/tmp/leos-radio.sock"
-#define DEFAULT_SPI_DEVICE    "/dev/spidev0.0"
+#define DEFAULT_SPI_DEVICE    "/dev/spidev0.1"
 #define DEFAULT_GPIO_CHIP     "/dev/gpiochip0"
 #define DEFAULT_SPI_BAUD_HZ   8000000u
 
