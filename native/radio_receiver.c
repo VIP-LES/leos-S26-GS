@@ -62,7 +62,8 @@ typedef struct
 typedef struct
 {
     leos_radio_t radio;
-    struct gpiod_line *dio1_line;
+    struct gpiod_line_request *dio1_request;
+    struct gpiod_edge_event_buffer *dio1_event_buffer;
     atomic_bool irq_pending;
     leos_radio_hw_config_t hw;
     leos_radio_config_t cfg;
@@ -384,13 +385,75 @@ static int handle_client_message(app_state_t *state)
 
 static int request_dio1_line(app_state_t *state, radio_state_t *radio)
 {
-    radio->dio1_line = gpiod_chip_get_line(state->gpio_chip, (unsigned int)radio->hw.pin_dio1);
-    if (radio->dio1_line == NULL)
+    struct gpiod_line_settings *settings = NULL;
+    struct gpiod_line_config *line_cfg = NULL;
+    struct gpiod_request_config *req_cfg = NULL;
+    unsigned int offset = (unsigned int)radio->hw.pin_dio1;
+    int rc = -1;
+
+    settings = gpiod_line_settings_new();
+    if (settings == NULL)
     {
         return -1;
     }
 
-    return gpiod_line_request_rising_edge_events(radio->dio1_line, "leos_radio_receiver");
+    if ((gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_INPUT) != 0) ||
+        (gpiod_line_settings_set_edge_detection(settings, GPIOD_LINE_EDGE_RISING) != 0))
+    {
+        goto cleanup;
+    }
+
+    line_cfg = gpiod_line_config_new();
+    if (line_cfg == NULL)
+    {
+        goto cleanup;
+    }
+
+    if (gpiod_line_config_add_line_settings(line_cfg, &offset, 1, settings) != 0)
+    {
+        goto cleanup;
+    }
+
+    req_cfg = gpiod_request_config_new();
+    if (req_cfg == NULL)
+    {
+        goto cleanup;
+    }
+
+    gpiod_request_config_set_consumer(req_cfg, "leos_radio_receiver");
+    gpiod_request_config_set_event_buffer_size(req_cfg, 4);
+
+    radio->dio1_request = gpiod_chip_request_lines(state->gpio_chip, req_cfg, line_cfg);
+    if (radio->dio1_request == NULL)
+    {
+        goto cleanup;
+    }
+
+    radio->dio1_event_buffer = gpiod_edge_event_buffer_new(4);
+    if (radio->dio1_event_buffer == NULL)
+    {
+        gpiod_line_request_release(radio->dio1_request);
+        radio->dio1_request = NULL;
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    if (req_cfg != NULL)
+    {
+        gpiod_request_config_free(req_cfg);
+    }
+    if (line_cfg != NULL)
+    {
+        gpiod_line_config_free(line_cfg);
+    }
+    if (settings != NULL)
+    {
+        gpiod_line_settings_free(settings);
+    }
+
+    return rc;
 }
 
 static void wake_main_loop(app_state_t *state)
@@ -425,13 +488,13 @@ static void *irq_thread_main(void *arg)
     int sx1262_fd = -1;
     int sx1268_fd = -1;
 
-    if ((state->sx1262.dio1_line != NULL) && state->config.sx1262_enabled)
+    if ((state->sx1262.dio1_request != NULL) && state->config.sx1262_enabled)
     {
-        sx1262_fd = gpiod_line_event_get_fd(state->sx1262.dio1_line);
+        sx1262_fd = gpiod_line_request_get_fd(state->sx1262.dio1_request);
     }
-    if ((state->sx1268.dio1_line != NULL) && state->config.sx1268_enabled)
+    if ((state->sx1268.dio1_request != NULL) && state->config.sx1268_enabled)
     {
-        sx1268_fd = gpiod_line_event_get_fd(state->sx1268.dio1_line);
+        sx1268_fd = gpiod_line_request_get_fd(state->sx1268.dio1_request);
     }
 
     for (;;)
@@ -479,8 +542,9 @@ static void *irq_thread_main(void *arg)
 
         if ((sx1262_index >= 0) && ((fds[sx1262_index].revents & POLLIN) != 0))
         {
-            struct gpiod_line_event event;
-            if (gpiod_line_event_read(state->sx1262.dio1_line, &event) == 0)
+            if (gpiod_line_request_read_edge_events(state->sx1262.dio1_request,
+                                                    state->sx1262.dio1_event_buffer,
+                                                    4) > 0)
             {
                 atomic_store(&state->sx1262.irq_pending, true);
                 wake_main_loop(state);
@@ -489,8 +553,9 @@ static void *irq_thread_main(void *arg)
 
         if ((sx1268_index >= 0) && ((fds[sx1268_index].revents & POLLIN) != 0))
         {
-            struct gpiod_line_event event;
-            if (gpiod_line_event_read(state->sx1268.dio1_line, &event) == 0)
+            if (gpiod_line_request_read_edge_events(state->sx1268.dio1_request,
+                                                    state->sx1268.dio1_event_buffer,
+                                                    4) > 0)
             {
                 atomic_store(&state->sx1268.irq_pending, true);
                 wake_main_loop(state);
@@ -589,15 +654,25 @@ static void cleanup_state(app_state_t *state)
         (void)pthread_join(state->irq_thread, NULL);
         state->irq_thread = 0;
     }
-    if (state->sx1268.dio1_line != NULL)
+    if (state->sx1268.dio1_event_buffer != NULL)
     {
-        gpiod_line_release(state->sx1268.dio1_line);
-        state->sx1268.dio1_line = NULL;
+        gpiod_edge_event_buffer_free(state->sx1268.dio1_event_buffer);
+        state->sx1268.dio1_event_buffer = NULL;
     }
-    if (state->sx1262.dio1_line != NULL)
+    if (state->sx1268.dio1_request != NULL)
     {
-        gpiod_line_release(state->sx1262.dio1_line);
-        state->sx1262.dio1_line = NULL;
+        gpiod_line_request_release(state->sx1268.dio1_request);
+        state->sx1268.dio1_request = NULL;
+    }
+    if (state->sx1262.dio1_event_buffer != NULL)
+    {
+        gpiod_edge_event_buffer_free(state->sx1262.dio1_event_buffer);
+        state->sx1262.dio1_event_buffer = NULL;
+    }
+    if (state->sx1262.dio1_request != NULL)
+    {
+        gpiod_line_request_release(state->sx1262.dio1_request);
+        state->sx1262.dio1_request = NULL;
     }
     if (state->gpio_chip != NULL)
     {
