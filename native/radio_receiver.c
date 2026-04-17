@@ -18,38 +18,38 @@
 
 #include "leos/sx126x.h"
 
-#define IPC_MSG_RX_PACKET    0x01u
+#define IPC_MSG_RX_PACKET 0x01u
 #define IPC_MSG_BUTTON_EVENT 0x02u
-#define IPC_MSG_TX_PACKET    0x03u
-#define IPC_MSG_TX_RESULT    0x04u
+#define IPC_MSG_TX_PACKET 0x03u
+#define IPC_MSG_TX_RESULT 0x04u
 
-#define IPC_TX_STATUS_OK           0x00u
-#define IPC_TX_STATUS_RADIO_ERROR  0x02u
+#define IPC_TX_STATUS_OK 0x00u
+#define IPC_TX_STATUS_RADIO_ERROR 0x02u
 
-#define DEFAULT_SOCKET_PATH   "/tmp/leos-radio.sock"
+#define DEFAULT_SOCKET_PATH "/tmp/leos-radio.sock"
 #define DEFAULT_SX1262_SPI_DEVICE "/dev/spidev0.0"
 #define DEFAULT_SX1268_SPI_DEVICE "/dev/spidev0.1"
-#define DEFAULT_GPIO_CHIP     "/dev/gpiochip0"
-#define DEFAULT_SPI_BAUD_HZ   8000000u
+#define DEFAULT_GPIO_CHIP "/dev/gpiochip0"
+#define DEFAULT_SPI_BAUD_HZ 8000000u
 
-#define DEFAULT_SX1262_NSS    13u
-#define DEFAULT_SX1262_BUSY   19u
-#define DEFAULT_SX1262_DIO1   17u
+#define DEFAULT_SX1262_NSS 13u
+#define DEFAULT_SX1262_BUSY 19u
+#define DEFAULT_SX1262_DIO1 17u
 
-#define DEFAULT_SX1268_NSS    14u
-#define DEFAULT_SX1268_BUSY   18u
-#define DEFAULT_SX1268_DIO1   16u
-#define DEFAULT_RESET_LINE    15u
+#define DEFAULT_SX1268_NSS 14u
+#define DEFAULT_SX1268_BUSY 18u
+#define DEFAULT_SX1268_DIO1 16u
+#define DEFAULT_RESET_LINE 15u
 
 #define DEFAULT_SX1262_DIO2_RF_SWITCH_ENABLE true
-#define DEFAULT_SX1262_DIO3_TCXO_ENABLE      true
-#define DEFAULT_SX1262_TCXO_VOLTAGE          LEOS_RADIO_TCXO_2P2V
-#define DEFAULT_SX1262_TCXO_DELAY_US         5000u
+#define DEFAULT_SX1262_DIO3_TCXO_ENABLE true
+#define DEFAULT_SX1262_TCXO_VOLTAGE LEOS_RADIO_TCXO_2P2V
+#define DEFAULT_SX1262_TCXO_DELAY_US 5000u
 
 #define DEFAULT_SX1268_DIO2_RF_SWITCH_ENABLE true
-#define DEFAULT_SX1268_DIO3_TCXO_ENABLE      true
-#define DEFAULT_SX1268_TCXO_VOLTAGE          LEOS_RADIO_TCXO_2P2V
-#define DEFAULT_SX1268_TCXO_DELAY_US         5000u
+#define DEFAULT_SX1268_DIO3_TCXO_ENABLE true
+#define DEFAULT_SX1268_TCXO_VOLTAGE LEOS_RADIO_TCXO_2P2V
+#define DEFAULT_SX1268_TCXO_DELAY_US 5000u
 
 typedef struct
 {
@@ -128,22 +128,22 @@ static const char *radio_status_name(leos_radio_status_t status)
 {
     switch (status)
     {
-        case LEOS_RADIO_OK:
-            return "LEOS_RADIO_OK";
-        case LEOS_RADIO_ERR_ARG:
-            return "LEOS_RADIO_ERR_ARG";
-        case LEOS_RADIO_ERR_STATE:
-            return "LEOS_RADIO_ERR_STATE";
-        case LEOS_RADIO_ERR_IO:
-            return "LEOS_RADIO_ERR_IO";
-        case LEOS_RADIO_ERR_TIMEOUT:
-            return "LEOS_RADIO_ERR_TIMEOUT";
-        case LEOS_RADIO_ERR_BUSY:
-            return "LEOS_RADIO_ERR_BUSY";
-        case LEOS_RADIO_ERR_DRIVER:
-            return "LEOS_RADIO_ERR_DRIVER";
-        default:
-            return "LEOS_RADIO_ERR_UNKNOWN";
+    case LEOS_RADIO_OK:
+        return "LEOS_RADIO_OK";
+    case LEOS_RADIO_ERR_ARG:
+        return "LEOS_RADIO_ERR_ARG";
+    case LEOS_RADIO_ERR_STATE:
+        return "LEOS_RADIO_ERR_STATE";
+    case LEOS_RADIO_ERR_IO:
+        return "LEOS_RADIO_ERR_IO";
+    case LEOS_RADIO_ERR_TIMEOUT:
+        return "LEOS_RADIO_ERR_TIMEOUT";
+    case LEOS_RADIO_ERR_BUSY:
+        return "LEOS_RADIO_ERR_BUSY";
+    case LEOS_RADIO_ERR_DRIVER:
+        return "LEOS_RADIO_ERR_DRIVER";
+    default:
+        return "LEOS_RADIO_ERR_UNKNOWN";
     }
 }
 
@@ -376,9 +376,11 @@ static int emit_rx_packet(app_state_t *state, leos_radio_t radio)
     status = leos_sx126x_read(radio, &message[2], 255u, &rx_len, &info);
     if (status != LEOS_RADIO_OK)
     {
+        fprintf(stderr, "radio_receiver: leos_sx126x_read failed on %s\n", radio_name(radio));
         return -1;
     }
 
+    fprintf(stderr, "radio_receiver: read %zu bytes from %s\n", rx_len, radio_name(radio));
     return send_ipc_message(state, message, rx_len + 2u);
 }
 
@@ -401,18 +403,23 @@ static int service_radio_irq(app_state_t *state, radio_state_t *radio)
         return 0;
     }
 
+    fprintf(stderr, "radio_receiver: servicing IRQ for %s\n", radio_name(radio->radio));
+
     atomic_store(&radio->irq_pending, false);
 
     status = leos_sx126x_process_irq(radio->radio);
     if (status != LEOS_RADIO_OK)
     {
+        fprintf(stderr, "radio_receiver: process_irq failed for %s\n", radio_name(radio->radio));
         return -1;
     }
 
     if (leos_sx126x_packet_available(radio->radio))
     {
+        fprintf(stderr, "radio_receiver: packet available on %s\n", radio_name(radio->radio));
         if (emit_rx_packet(state, radio->radio) != 0)
         {
+            fprintf(stderr, "radio_receiver: emit_rx_packet failed on %s\n", radio_name(radio->radio));
             return -1;
         }
     }
@@ -670,6 +677,7 @@ static void *irq_thread_main(void *arg)
                                                     state->sx1262.dio1_event_buffer,
                                                     4) > 0)
             {
+                fprintf(stderr, "radio_receiver: SX1262 DIO1 edge detected\n");
                 leos_sx126x_handle_dio1_irq(state->sx1262.radio);
                 atomic_store(&state->sx1262.irq_pending, true);
                 wake_main_loop(state);
