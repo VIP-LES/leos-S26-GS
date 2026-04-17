@@ -24,7 +24,6 @@
 #define IPC_MSG_TX_RESULT    0x04u
 
 #define IPC_TX_STATUS_OK           0x00u
-#define IPC_TX_STATUS_UNSUPPORTED  0x01u
 #define IPC_TX_STATUS_RADIO_ERROR  0x02u
 
 #define DEFAULT_SOCKET_PATH   "/tmp/leos-radio.sock"
@@ -42,12 +41,21 @@
 #define DEFAULT_SX1268_DIO1   16u
 #define DEFAULT_RESET_LINE    15u
 
+#define DEFAULT_SX1262_DIO2_RF_SWITCH_ENABLE true
+#define DEFAULT_SX1262_DIO3_TCXO_ENABLE      true
+#define DEFAULT_SX1262_TCXO_VOLTAGE          LEOS_RADIO_TCXO_2P2V
+#define DEFAULT_SX1262_TCXO_DELAY_US         5000u
+
+#define DEFAULT_SX1268_DIO2_RF_SWITCH_ENABLE true
+#define DEFAULT_SX1268_DIO3_TCXO_ENABLE      true
+#define DEFAULT_SX1268_TCXO_VOLTAGE          LEOS_RADIO_TCXO_2P2V
+#define DEFAULT_SX1268_TCXO_DELAY_US         5000u
+
 typedef struct
 {
     const char *socket_path;
     const char *sx1262_spi_device;
     const char *sx1268_spi_device;
-    const char *gpio_chip_path;
     uint32_t spi_baud_hz;
     bool sx1262_enabled;
     bool sx1268_enabled;
@@ -55,9 +63,17 @@ typedef struct
     uint32_t sx1262_nss;
     uint32_t sx1262_busy;
     uint32_t sx1262_dio1;
+    bool sx1262_dio2_rf_switch_enable;
+    bool sx1262_dio3_tcxo_enable;
+    leos_radio_tcxo_voltage_t sx1262_tcxo_voltage;
+    uint32_t sx1262_tcxo_delay_us;
     uint32_t sx1268_nss;
     uint32_t sx1268_busy;
     uint32_t sx1268_dio1;
+    bool sx1268_dio2_rf_switch_enable;
+    bool sx1268_dio3_tcxo_enable;
+    leos_radio_tcxo_voltage_t sx1268_tcxo_voltage;
+    uint32_t sx1268_tcxo_delay_us;
 } app_config_t;
 
 typedef struct
@@ -164,7 +180,6 @@ static void load_config(app_config_t *cfg)
     cfg->socket_path = env_str("RADIO_SOCKET_PATH", DEFAULT_SOCKET_PATH);
     cfg->sx1262_spi_device = env_str("RADIO_SX1262_SPI_DEVICE", DEFAULT_SX1262_SPI_DEVICE);
     cfg->sx1268_spi_device = env_str("RADIO_SX1268_SPI_DEVICE", DEFAULT_SX1268_SPI_DEVICE);
-    cfg->gpio_chip_path = env_str("RADIO_GPIO_CHIP", DEFAULT_GPIO_CHIP);
     cfg->spi_baud_hz = env_u32("RADIO_SPI_BAUD_HZ", DEFAULT_SPI_BAUD_HZ);
     cfg->sx1262_enabled = true;
     cfg->sx1268_enabled = true;
@@ -189,13 +204,21 @@ static void load_config(app_config_t *cfg)
     cfg->sx1262_nss = env_u32("RADIO_SX1262_NSS_LINE", DEFAULT_SX1262_NSS);
     cfg->sx1262_busy = env_u32("RADIO_SX1262_BUSY_LINE", DEFAULT_SX1262_BUSY);
     cfg->sx1262_dio1 = env_u32("RADIO_SX1262_DIO1_LINE", DEFAULT_SX1262_DIO1);
+    cfg->sx1262_dio2_rf_switch_enable = DEFAULT_SX1262_DIO2_RF_SWITCH_ENABLE;
+    cfg->sx1262_dio3_tcxo_enable = DEFAULT_SX1262_DIO3_TCXO_ENABLE;
+    cfg->sx1262_tcxo_voltage = DEFAULT_SX1262_TCXO_VOLTAGE;
+    cfg->sx1262_tcxo_delay_us = DEFAULT_SX1262_TCXO_DELAY_US;
 
     cfg->sx1268_nss = env_u32("RADIO_SX1268_NSS_LINE", DEFAULT_SX1268_NSS);
     cfg->sx1268_busy = env_u32("RADIO_SX1268_BUSY_LINE", DEFAULT_SX1268_BUSY);
     cfg->sx1268_dio1 = env_u32("RADIO_SX1268_DIO1_LINE", DEFAULT_SX1268_DIO1);
+    cfg->sx1268_dio2_rf_switch_enable = DEFAULT_SX1268_DIO2_RF_SWITCH_ENABLE;
+    cfg->sx1268_dio3_tcxo_enable = DEFAULT_SX1268_DIO3_TCXO_ENABLE;
+    cfg->sx1268_tcxo_voltage = DEFAULT_SX1268_TCXO_VOLTAGE;
+    cfg->sx1268_tcxo_delay_us = DEFAULT_SX1268_TCXO_DELAY_US;
 }
 
-static void build_radio_config(leos_radio_t radio, leos_radio_config_t *cfg)
+static void build_radio_config(const app_state_t *state, leos_radio_t radio, leos_radio_config_t *cfg)
 {
     leos_sx126x_get_default_config(radio, cfg);
 
@@ -209,6 +232,10 @@ static void build_radio_config(leos_radio_t radio, leos_radio_config_t *cfg)
         cfg->coding_rate = LEOS_RADIO_CR_4_5;
         cfg->spreading_factor = LEOS_RADIO_SF_9;
         cfg->sync_word = 0x12u;
+        cfg->dio2_rf_switch_enable = state->config.sx1262_dio2_rf_switch_enable;
+        cfg->dio3_tcxo_enable = state->config.sx1262_dio3_tcxo_enable;
+        cfg->tcxo_voltage = state->config.sx1262_tcxo_voltage;
+        cfg->tcxo_delay_us = state->config.sx1262_tcxo_delay_us;
     }
     else
     {
@@ -220,6 +247,10 @@ static void build_radio_config(leos_radio_t radio, leos_radio_config_t *cfg)
         cfg->coding_rate = LEOS_RADIO_CR_4_5;
         cfg->spreading_factor = LEOS_RADIO_SF_7;
         cfg->sync_word = 0x12u;
+        cfg->dio2_rf_switch_enable = state->config.sx1268_dio2_rf_switch_enable;
+        cfg->dio3_tcxo_enable = state->config.sx1268_dio3_tcxo_enable;
+        cfg->tcxo_voltage = state->config.sx1268_tcxo_voltage;
+        cfg->tcxo_delay_us = state->config.sx1268_tcxo_delay_us;
     }
 }
 
@@ -325,6 +356,11 @@ static int send_tx_result(app_state_t *state, leos_radio_t radio, uint8_t status
     return send_ipc_message(state, message, sizeof(message));
 }
 
+static uint8_t ipc_tx_status_from_radio_status(leos_radio_status_t status)
+{
+    return (status == LEOS_RADIO_OK) ? IPC_TX_STATUS_OK : IPC_TX_STATUS_RADIO_ERROR;
+}
+
 static int emit_rx_packet(app_state_t *state, leos_radio_t radio)
 {
     uint8_t message[2 + 255];
@@ -366,7 +402,6 @@ static int service_radio_irq(app_state_t *state, radio_state_t *radio)
     }
 
     atomic_store(&radio->irq_pending, false);
-    leos_sx126x_handle_dio1_irq(radio->radio);
 
     status = leos_sx126x_process_irq(radio->radio);
     if (status != LEOS_RADIO_OK)
@@ -407,6 +442,9 @@ static int handle_client_message(app_state_t *state)
     uint8_t buf[2 + 255];
     ssize_t len;
     leos_radio_t radio;
+    leos_radio_status_t status;
+    leos_radio_mode_t previous_mode;
+    size_t payload_len;
 
     len = recv(state->client_fd, buf, sizeof(buf), 0);
     if (len <= 0)
@@ -427,12 +465,25 @@ static int handle_client_message(app_state_t *state)
     }
 
     radio = (buf[1] == (uint8_t)LEOS_RADIO_SX1268) ? LEOS_RADIO_SX1268 : LEOS_RADIO_SX1262;
+    payload_len = (size_t)len - 2u;
+    if (payload_len == 0u)
+    {
+        return send_tx_result(state, radio, IPC_TX_STATUS_RADIO_ERROR);
+    }
 
-    /*
-     * TX IPC is reserved for future use. RX is the only active workflow in
-     * this implementation, so return a minimal unsupported status for now.
-     */
-    return send_tx_result(state, radio, IPC_TX_STATUS_UNSUPPORTED);
+    if (!radio_is_enabled(state, radio))
+    {
+        return send_tx_result(state, radio, IPC_TX_STATUS_RADIO_ERROR);
+    }
+
+    previous_mode = leos_sx126x_mode(radio);
+    status = leos_sx126x_send(radio, &buf[2], payload_len);
+    if ((status == LEOS_RADIO_OK) && (previous_mode == LEOS_RADIO_MODE_RX))
+    {
+        status = leos_sx126x_start_rx(radio);
+    }
+
+    return send_tx_result(state, radio, ipc_tx_status_from_radio_status(status));
 }
 
 static int request_dio1_line(app_state_t *state, radio_state_t *radio)
@@ -619,6 +670,7 @@ static void *irq_thread_main(void *arg)
                                                     state->sx1262.dio1_event_buffer,
                                                     4) > 0)
             {
+                leos_sx126x_handle_dio1_irq(state->sx1262.radio);
                 atomic_store(&state->sx1262.irq_pending, true);
                 wake_main_loop(state);
             }
@@ -630,6 +682,7 @@ static void *irq_thread_main(void *arg)
                                                     state->sx1268.dio1_event_buffer,
                                                     4) > 0)
             {
+                leos_sx126x_handle_dio1_irq(state->sx1268.radio);
                 atomic_store(&state->sx1268.irq_pending, true);
                 wake_main_loop(state);
             }
@@ -688,12 +741,12 @@ static int init_state(app_state_t *state)
         return -1;
     }
 
-    state->gpio_chip = gpiod_chip_open(state->config.gpio_chip_path);
+    state->gpio_chip = gpiod_chip_open(DEFAULT_GPIO_CHIP);
     if (state->gpio_chip == NULL)
     {
         fprintf(stderr,
                 "radio_receiver: init_state: failed to open GPIO chip %s\n",
-                state->config.gpio_chip_path);
+                DEFAULT_GPIO_CHIP);
         log_errno_message("init_state GPIO chip open");
         return -1;
     }
@@ -703,8 +756,8 @@ static int init_state(app_state_t *state)
 
     build_radio_hw(state, &state->sx1262);
     build_radio_hw(state, &state->sx1268);
-    build_radio_config(LEOS_RADIO_SX1262, &state->sx1262.cfg);
-    build_radio_config(LEOS_RADIO_SX1268, &state->sx1268.cfg);
+    build_radio_config(state, LEOS_RADIO_SX1262, &state->sx1262.cfg);
+    build_radio_config(state, LEOS_RADIO_SX1268, &state->sx1268.cfg);
 
     if (state->config.sx1262_enabled && (request_dio1_line(state, &state->sx1262) != 0))
     {
