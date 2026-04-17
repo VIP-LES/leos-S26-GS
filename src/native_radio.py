@@ -103,9 +103,15 @@ def run_native_radio(
 
             if message_kind == IPC_MSG_RX_PACKET:
                 frame = message[2:]
+                print(f"RAW FRAME LEN={len(frame)} DATA={frame.hex()}", flush=True)
                 message_type, payload = decode_rf_frame_to_ingest_payload(frame)
                 queue_writer.enqueue(queue_path, message_type, payload)
-                logger.info("Queued radio %d %s payload at %s", radio_id, message_type, payload["time"])
+                logger.info(
+                    "Queued radio %d %s payload at %s",
+                    radio_id,
+                    message_type,
+                    payload["time"],
+                )
                 continue
 
             if message_kind == IPC_MSG_BUTTON_EVENT:
@@ -113,7 +119,11 @@ def run_native_radio(
                 continue
 
             if message_kind == IPC_MSG_TX_RESULT:
-                logger.info("TX result from radio %d status=%d", radio_id, message[2] if len(message) > 2 else -1)
+                logger.info(
+                    "TX result from radio %d status=%d",
+                    radio_id,
+                    message[2] if len(message) > 2 else -1,
+                )
                 continue
 
             logger.warning("Ignoring unknown IPC message kind 0x%02x", message_kind)
