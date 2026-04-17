@@ -224,11 +224,11 @@ static void build_radio_config(const app_state_t *state, leos_radio_t radio, leo
 
     if (radio == LEOS_RADIO_SX1262)
     {
-        cfg->rf_frequency_hz = 915000000u;
+        cfg->rf_frequency_hz = 918250000u;
         cfg->tx_power_dbm = 14;
         cfg->crc_enabled = true;
         cfg->iq_inverted = false;
-        cfg->bandwidth = LEOS_RADIO_BW_125_KHZ;
+        cfg->bandwidth = LEOS_RADIO_BW_250_KHZ;
         cfg->coding_rate = LEOS_RADIO_CR_4_5;
         cfg->spreading_factor = LEOS_RADIO_SF_9;
         cfg->sync_word = 0x12u;
@@ -245,7 +245,7 @@ static void build_radio_config(const app_state_t *state, leos_radio_t radio, leo
         cfg->iq_inverted = false;
         cfg->bandwidth = LEOS_RADIO_BW_500_KHZ;
         cfg->coding_rate = LEOS_RADIO_CR_4_5;
-        cfg->spreading_factor = LEOS_RADIO_SF_7;
+        cfg->spreading_factor = LEOS_RADIO_SF_5;
         cfg->sync_word = 0x12u;
         cfg->dio2_rf_switch_enable = state->config.sx1268_dio2_rf_switch_enable;
         cfg->dio3_tcxo_enable = state->config.sx1268_dio3_tcxo_enable;
