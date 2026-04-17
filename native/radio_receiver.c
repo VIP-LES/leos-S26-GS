@@ -37,9 +37,9 @@
 #define DEFAULT_SX1262_DIO1 17u
 
 #define DEFAULT_SX1268_NSS 14u
-#define DEFAULT_SX1268_BUSY 18u
-#define DEFAULT_SX1268_DIO1 16u
-#define DEFAULT_RESET_LINE 15u
+#define DEFAULT_SX1268_BUSY 27u
+#define DEFAULT_SX1268_DIO1 4u
+#define DEFAULT_RESET_LINE 25u
 
 #define DEFAULT_SX1262_DIO2_RF_SWITCH_ENABLE true
 #define DEFAULT_SX1262_DIO3_TCXO_ENABLE true
@@ -342,7 +342,6 @@ static int send_ipc_message(app_state_t *state, const uint8_t *buf, size_t len)
         state->client_fd = -1;
         return -1;
     }
-
     return 0;
 }
 
