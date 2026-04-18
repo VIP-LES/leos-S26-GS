@@ -4,10 +4,28 @@ import os
 import threading
 import logging
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+
+def load_environment() -> list[str]:
+    repo_root = Path(__file__).resolve().parent
+    loaded: list[str] = []
+    env_files = (
+        repo_root / ".env",
+        repo_root / ".env.pi-local",
+    )
+
+    for env_file in env_files:
+        if env_file.exists():
+            load_dotenv(env_file, override=True)
+            loaded.append(env_file.name)
+
+    return loaded
+
+
+LOADED_ENV_FILES = load_environment()
 
 import uvicorn  # noqa: E402 — must import after load_dotenv
 
@@ -26,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    if LOADED_ENV_FILES:
+        logger.info("Loaded environment file(s): %s", ", ".join(LOADED_ENV_FILES))
+    else:
+        logger.info("No environment file found; using process environment only")
+
     mode = os.environ.get("GROUNDSTATION_MODE", "lab").strip().lower()
     if mode == "lab":
         run_lab_mode()
