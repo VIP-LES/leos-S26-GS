@@ -5,6 +5,7 @@
 #include <gpiod.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -50,6 +51,39 @@
 #define DEFAULT_SX1268_DIO3_TCXO_ENABLE true
 #define DEFAULT_SX1268_TCXO_VOLTAGE LEOS_RADIO_TCXO_2P2V
 #define DEFAULT_SX1268_TCXO_DELAY_US 5000u
+#define HEARTBEAT_INTERVAL_MS 1000u
+
+typedef enum
+{
+    LOG_LEVEL_TRACE,
+    LOG_LEVEL_INFO,
+    LOG_LEVEL_WARNING,
+    LOG_LEVEL_ERROR,
+} log_level_t;
+
+typedef struct
+{
+    uint64_t dio1_edges;
+    uint64_t poll_calls;
+    uint64_t rx_packets;
+    uint64_t rx_bytes;
+    uint64_t tx_started;
+    uint64_t tx_completed_ok;
+    uint64_t tx_completed_err;
+    uint64_t tx_restart_rx_failures;
+    uint64_t ipc_tx_results_sent;
+} radio_stats_t;
+
+typedef struct
+{
+    uint64_t client_connects;
+    uint64_t client_disconnects;
+    uint64_t ipc_messages_sent;
+    uint64_t ipc_send_failures;
+    uint64_t ipc_messages_received;
+    uint64_t short_client_messages;
+    uint64_t unknown_client_messages;
+} app_stats_t;
 
 typedef struct
 {
@@ -83,6 +117,8 @@ typedef struct
     struct gpiod_edge_event_buffer *dio1_event_buffer;
     atomic_bool irq_pending;
     bool restart_rx_after_tx;
+    radio_stats_t stats;
+    radio_stats_t last_heartbeat_stats;
     leos_radio_hw_config_t hw;
     leos_radio_config_t cfg;
 } radio_state_t;
@@ -99,25 +135,46 @@ typedef struct
     struct gpiod_chip *gpio_chip;
     pthread_t irq_thread;
     atomic_bool stop_requested;
+    app_stats_t stats;
+    app_stats_t last_heartbeat_stats;
+    uint64_t last_heartbeat_ms;
     radio_state_t sx1262;
     radio_state_t sx1268;
 } app_state_t;
 
-static void log_error(const char *message)
+static const char *log_level_name(log_level_t level)
 {
-    fprintf(stderr, "radio_receiver: %s\n", message);
+    switch (level)
+    {
+    case LOG_LEVEL_TRACE:
+        return "TRACE";
+    case LOG_LEVEL_INFO:
+        return "INFO";
+    case LOG_LEVEL_WARNING:
+        return "WARN";
+    case LOG_LEVEL_ERROR:
+        return "ERROR";
+    default:
+        return "UNKNOWN";
+    }
 }
 
-static void log_info(const char *message)
+static void log_message(log_level_t level, const char *fmt, ...)
 {
-    fprintf(stderr, "radio_receiver: %s\n", message);
+    va_list args;
+
+    fprintf(stderr, "radio_receiver [%s]: ", log_level_name(level));
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    fputc('\n', stderr);
 }
 
-static void log_errno_message(const char *context)
+static void log_errno_message(log_level_t level, const char *context)
 {
     int err = errno;
 
-    fprintf(stderr, "radio_receiver: %s: %s (errno=%d)\n", context, strerror(err), err);
+    log_message(level, "%s: %s (errno=%d)", context, strerror(err), err);
 }
 
 static const char *radio_name(leos_radio_t radio)
@@ -146,6 +203,28 @@ static const char *radio_status_name(leos_radio_status_t status)
     default:
         return "LEOS_RADIO_ERR_UNKNOWN";
     }
+}
+
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    {
+        return 0u;
+    }
+
+    return ((uint64_t)ts.tv_sec * 1000u) + (uint64_t)(ts.tv_nsec / 1000000L);
+}
+
+static radio_state_t *radio_state_for(app_state_t *state, leos_radio_t radio)
+{
+    if (radio == LEOS_RADIO_SX1268)
+    {
+        return &state->sx1268;
+    }
+
+    return &state->sx1262;
 }
 
 static uint32_t env_u32(const char *name, uint32_t fallback)
@@ -196,9 +275,7 @@ static void load_config(app_config_t *cfg)
     }
     else if (strcmp(radio_enabled, "both") != 0)
     {
-        fprintf(stderr,
-                "radio_receiver: unsupported RADIO_ENABLED=%s, defaulting to both\n",
-                radio_enabled);
+        log_message(LOG_LEVEL_WARNING, "unsupported RADIO_ENABLED=%s, defaulting to both", radio_enabled);
     }
 
     cfg->reset_line = env_u32("RADIO_RESET_LINE", DEFAULT_RESET_LINE);
@@ -339,10 +416,12 @@ static int send_ipc_message(app_state_t *state, const uint8_t *buf, size_t len)
     sent = send(state->client_fd, buf, len, MSG_NOSIGNAL);
     if (sent < 0)
     {
+        state->stats.ipc_send_failures++;
         close(state->client_fd);
         state->client_fd = -1;
         return -1;
     }
+    state->stats.ipc_messages_sent++;
     return 0;
 }
 
@@ -367,6 +446,7 @@ static int emit_rx_packet(app_state_t *state, leos_radio_t radio)
     size_t rx_len = 0u;
     leos_radio_packet_info_t info;
     leos_radio_status_t status;
+    radio_state_t *radio_state = radio_state_for(state, radio);
 
     memset(&info, 0, sizeof(info));
 
@@ -376,11 +456,13 @@ static int emit_rx_packet(app_state_t *state, leos_radio_t radio)
     status = leos_sx126x_read(radio, &message[2], 255u, &rx_len, &info);
     if (status != LEOS_RADIO_OK)
     {
-        fprintf(stderr, "radio_receiver: leos_sx126x_read failed on %s\n", radio_name(radio));
+        log_message(LOG_LEVEL_ERROR, "leos_sx126x_read failed on %s", radio_name(radio));
         return -1;
     }
 
-    fprintf(stderr, "radio_receiver: read %zu bytes from %s\n", rx_len, radio_name(radio));
+    radio_state->stats.rx_packets++;
+    radio_state->stats.rx_bytes += (uint64_t)rx_len;
+    log_message(LOG_LEVEL_TRACE, "read %zu bytes from %s", rx_len, radio_name(radio));
     return send_ipc_message(state, message, rx_len + 2u);
 }
 
@@ -398,49 +480,73 @@ static int service_radio(app_state_t *state, radio_state_t *radio)
 {
     leos_radio_status_t status;
     const bool was_tx_in_flight = leos_sx126x_tx_in_flight(radio->radio);
+    const bool had_irq_pending = atomic_load(&radio->irq_pending);
 
     if (!radio_is_enabled(state, radio->radio))
     {
         return 0;
     }
 
+    radio->stats.poll_calls++;
     atomic_store(&radio->irq_pending, false);
 
     status = leos_sx126x_poll(radio->radio);
     if (status != LEOS_RADIO_OK)
     {
-        fprintf(stderr, "radio_receiver: poll failed for %s\n", radio_name(radio->radio));
+        log_message(LOG_LEVEL_ERROR, "poll failed for %s with %s",
+                    radio_name(radio->radio), radio_status_name(status));
         return -1;
+    }
+
+    if (had_irq_pending)
+    {
+        log_message(LOG_LEVEL_TRACE, "serviced deferred IRQ for %s", radio_name(radio->radio));
     }
 
     if (was_tx_in_flight && !leos_sx126x_tx_in_flight(radio->radio))
     {
         const leos_radio_status_t tx_status = leos_sx126x_last_tx_status(radio->radio);
+        const uint8_t ipc_status = ipc_tx_status_from_radio_status(tx_status);
 
         if (radio->restart_rx_after_tx && (tx_status == LEOS_RADIO_OK))
         {
             status = leos_sx126x_start_rx(radio->radio);
             if (status != LEOS_RADIO_OK)
             {
-                fprintf(stderr, "radio_receiver: restart RX failed for %s\n", radio_name(radio->radio));
+                radio->stats.tx_restart_rx_failures++;
+                log_message(LOG_LEVEL_ERROR, "restart RX failed for %s with %s",
+                            radio_name(radio->radio), radio_status_name(status));
                 return -1;
             }
         }
 
-        radio->restart_rx_after_tx = false;
-        if (send_tx_result(state, radio->radio, ipc_tx_status_from_radio_status(tx_status)) != 0)
+        if (tx_status == LEOS_RADIO_OK)
         {
-            fprintf(stderr, "radio_receiver: send_tx_result failed for %s\n", radio_name(radio->radio));
+            radio->stats.tx_completed_ok++;
+            log_message(LOG_LEVEL_TRACE, "TX completed on %s", radio_name(radio->radio));
+        }
+        else
+        {
+            radio->stats.tx_completed_err++;
+            log_message(LOG_LEVEL_WARNING, "TX completed with %s on %s",
+                        radio_status_name(tx_status), radio_name(radio->radio));
+        }
+
+        radio->restart_rx_after_tx = false;
+        if (send_tx_result(state, radio->radio, ipc_status) != 0)
+        {
+            log_message(LOG_LEVEL_ERROR, "send_tx_result failed for %s", radio_name(radio->radio));
             return -1;
         }
+        radio->stats.ipc_tx_results_sent++;
     }
 
     if (leos_sx126x_packet_available(radio->radio))
     {
-        fprintf(stderr, "radio_receiver: packet available on %s\n", radio_name(radio->radio));
+        log_message(LOG_LEVEL_TRACE, "packet available on %s", radio_name(radio->radio));
         if (emit_rx_packet(state, radio->radio) != 0)
         {
-            fprintf(stderr, "radio_receiver: emit_rx_packet failed on %s\n", radio_name(radio->radio));
+            log_message(LOG_LEVEL_ERROR, "emit_rx_packet failed on %s", radio_name(radio->radio));
             return -1;
         }
     }
@@ -460,8 +566,11 @@ static int accept_client(app_state_t *state)
     if (state->client_fd >= 0)
     {
         close(state->client_fd);
+        state->stats.client_disconnects++;
     }
     state->client_fd = client_fd;
+    state->stats.client_connects++;
+    log_message(LOG_LEVEL_INFO, "IPC client connected on %s", state->config.socket_path);
     return 0;
 }
 
@@ -480,16 +589,24 @@ static int handle_client_message(app_state_t *state)
     {
         close(state->client_fd);
         state->client_fd = -1;
+        state->stats.client_disconnects++;
+        log_message(LOG_LEVEL_WARNING, "IPC client disconnected");
         return 0;
     }
 
+    state->stats.ipc_messages_received++;
+
     if ((size_t)len < 2u)
     {
+        state->stats.short_client_messages++;
+        log_message(LOG_LEVEL_WARNING, "ignoring short client IPC message of %zd bytes", len);
         return 0;
     }
 
     if (buf[0] != IPC_MSG_TX_PACKET)
     {
+        state->stats.unknown_client_messages++;
+        log_message(LOG_LEVEL_WARNING, "ignoring unknown client IPC message kind 0x%02x", buf[0]);
         return 0;
     }
 
@@ -510,10 +627,15 @@ static int handle_client_message(app_state_t *state)
     status = leos_sx126x_start_tx(radio, &buf[2], payload_len);
     if (status != LEOS_RADIO_OK)
     {
+        log_message(LOG_LEVEL_WARNING, "start_tx failed for %s with %s",
+                    radio_name(radio), radio_status_name(status));
         return send_tx_result(state, radio, ipc_tx_status_from_radio_status(status));
     }
 
     radio_state->restart_rx_after_tx = (previous_mode == LEOS_RADIO_MODE_RX);
+    radio_state->stats.tx_started++;
+    log_message(LOG_LEVEL_TRACE, "accepted TX request for %s (%zu bytes, restart_rx=%d)",
+                radio_name(radio), payload_len, radio_state->restart_rx_after_tx ? 1 : 0);
     return 0;
 }
 
@@ -525,7 +647,99 @@ static int app_poll_timeout_ms(const app_state_t *state)
         return 50;
     }
 
-    return -1;
+    return (int)HEARTBEAT_INTERVAL_MS;
+}
+
+static void maybe_log_heartbeat(app_state_t *state)
+{
+    const uint64_t now = now_ms();
+    radio_state_t *radios[2] = {&state->sx1262, &state->sx1268};
+    const bool enabled[2] = {state->config.sx1262_enabled, state->config.sx1268_enabled};
+
+    if ((state->last_heartbeat_ms != 0u) && ((now - state->last_heartbeat_ms) < HEARTBEAT_INTERVAL_MS))
+    {
+        return;
+    }
+
+    state->last_heartbeat_ms = now;
+    for (size_t i = 0; i < 2u; ++i)
+    {
+        radio_state_t *radio = radios[i];
+        const radio_stats_t delta = {
+            .dio1_edges = radio->stats.dio1_edges - radio->last_heartbeat_stats.dio1_edges,
+            .poll_calls = radio->stats.poll_calls - radio->last_heartbeat_stats.poll_calls,
+            .rx_packets = radio->stats.rx_packets - radio->last_heartbeat_stats.rx_packets,
+            .rx_bytes = radio->stats.rx_bytes - radio->last_heartbeat_stats.rx_bytes,
+            .tx_started = radio->stats.tx_started - radio->last_heartbeat_stats.tx_started,
+            .tx_completed_ok = radio->stats.tx_completed_ok - radio->last_heartbeat_stats.tx_completed_ok,
+            .tx_completed_err = radio->stats.tx_completed_err - radio->last_heartbeat_stats.tx_completed_err,
+            .tx_restart_rx_failures = radio->stats.tx_restart_rx_failures - radio->last_heartbeat_stats.tx_restart_rx_failures,
+            .ipc_tx_results_sent = radio->stats.ipc_tx_results_sent - radio->last_heartbeat_stats.ipc_tx_results_sent,
+        };
+
+        if (!enabled[i])
+        {
+            log_message(LOG_LEVEL_INFO, "heartbeat %s disabled", radio_name(radio->radio));
+        }
+        else
+        {
+            log_message(LOG_LEVEL_INFO,
+                        "heartbeat %s delta{dio1=%llu poll=%llu rx_pkts=%llu rx_bytes=%llu tx_start=%llu tx_ok=%llu tx_err=%llu tx_result=%llu} "
+                        "total{dio1=%llu poll=%llu rx_pkts=%llu rx_bytes=%llu tx_start=%llu tx_ok=%llu tx_err=%llu tx_result=%llu}",
+                        radio_name(radio->radio),
+                        (unsigned long long)delta.dio1_edges,
+                        (unsigned long long)delta.poll_calls,
+                        (unsigned long long)delta.rx_packets,
+                        (unsigned long long)delta.rx_bytes,
+                        (unsigned long long)delta.tx_started,
+                        (unsigned long long)delta.tx_completed_ok,
+                        (unsigned long long)delta.tx_completed_err,
+                        (unsigned long long)delta.ipc_tx_results_sent,
+                        (unsigned long long)radio->stats.dio1_edges,
+                        (unsigned long long)radio->stats.poll_calls,
+                        (unsigned long long)radio->stats.rx_packets,
+                        (unsigned long long)radio->stats.rx_bytes,
+                        (unsigned long long)radio->stats.tx_started,
+                        (unsigned long long)radio->stats.tx_completed_ok,
+                        (unsigned long long)radio->stats.tx_completed_err,
+                        (unsigned long long)radio->stats.ipc_tx_results_sent);
+        }
+
+        radio->last_heartbeat_stats = radio->stats;
+    }
+
+    {
+        const app_stats_t delta = {
+            .client_connects = state->stats.client_connects - state->last_heartbeat_stats.client_connects,
+            .client_disconnects = state->stats.client_disconnects - state->last_heartbeat_stats.client_disconnects,
+            .ipc_messages_sent = state->stats.ipc_messages_sent - state->last_heartbeat_stats.ipc_messages_sent,
+            .ipc_send_failures = state->stats.ipc_send_failures - state->last_heartbeat_stats.ipc_send_failures,
+            .ipc_messages_received = state->stats.ipc_messages_received - state->last_heartbeat_stats.ipc_messages_received,
+            .short_client_messages = state->stats.short_client_messages - state->last_heartbeat_stats.short_client_messages,
+            .unknown_client_messages = state->stats.unknown_client_messages - state->last_heartbeat_stats.unknown_client_messages,
+        };
+
+        log_message(LOG_LEVEL_INFO,
+                    "heartbeat ipc delta{connect=%llu disconnect=%llu rx=%llu tx=%llu tx_fail=%llu short=%llu unknown=%llu} "
+                    "total{connect=%llu disconnect=%llu rx=%llu tx=%llu tx_fail=%llu short=%llu unknown=%llu} client=%s socket=%s",
+                    (unsigned long long)delta.client_connects,
+                    (unsigned long long)delta.client_disconnects,
+                    (unsigned long long)delta.ipc_messages_received,
+                    (unsigned long long)delta.ipc_messages_sent,
+                    (unsigned long long)delta.ipc_send_failures,
+                    (unsigned long long)delta.short_client_messages,
+                    (unsigned long long)delta.unknown_client_messages,
+                    (unsigned long long)state->stats.client_connects,
+                    (unsigned long long)state->stats.client_disconnects,
+                    (unsigned long long)state->stats.ipc_messages_received,
+                    (unsigned long long)state->stats.ipc_messages_sent,
+                    (unsigned long long)state->stats.ipc_send_failures,
+                    (unsigned long long)state->stats.short_client_messages,
+                    (unsigned long long)state->stats.unknown_client_messages,
+                    (state->client_fd >= 0) ? "connected" : "waiting",
+                    state->config.socket_path);
+        state->last_heartbeat_stats = state->stats;
+    }
 }
 
 static int request_dio1_line(app_state_t *state, radio_state_t *radio)
@@ -712,7 +926,8 @@ static void *irq_thread_main(void *arg)
                                                     state->sx1262.dio1_event_buffer,
                                                     4) > 0)
             {
-                fprintf(stderr, "radio_receiver: SX1262 DIO1 edge detected\n");
+                state->sx1262.stats.dio1_edges++;
+                log_message(LOG_LEVEL_TRACE, "SX1262 DIO1 edge detected");
                 leos_sx126x_handle_dio1_irq(state->sx1262.radio);
                 atomic_store(&state->sx1262.irq_pending, true);
                 wake_main_loop(state);
@@ -725,6 +940,8 @@ static void *irq_thread_main(void *arg)
                                                     state->sx1268.dio1_event_buffer,
                                                     4) > 0)
             {
+                state->sx1268.stats.dio1_edges++;
+                log_message(LOG_LEVEL_TRACE, "SX1268 DIO1 edge detected");
                 leos_sx126x_handle_dio1_irq(state->sx1268.radio);
                 atomic_store(&state->sx1268.irq_pending, true);
                 wake_main_loop(state);
@@ -742,20 +959,26 @@ static int init_state(app_state_t *state)
 
     if (!state->config.sx1262_enabled && !state->config.sx1268_enabled)
     {
-        log_error("init_state: no radios enabled after config parsing");
+        log_message(LOG_LEVEL_ERROR, "init_state: no radios enabled after config parsing");
         return -1;
     }
+
+    log_message(LOG_LEVEL_INFO,
+                "startup config socket=%s enabled{sx1262=%d sx1268=%d} spi{sx1262=%s sx1268=%s}",
+                state->config.socket_path,
+                state->config.sx1262_enabled ? 1 : 0,
+                state->config.sx1268_enabled ? 1 : 0,
+                state->config.sx1262_spi_device,
+                state->config.sx1268_spi_device);
 
     if (state->config.sx1262_enabled)
     {
         state->sx1262_spi_fd = open_spi_device(state->config.sx1262_spi_device);
         if (state->sx1262_spi_fd < 0)
         {
-            fprintf(stderr,
-                    "radio_receiver: init_state: failed to open SPI device %s for %s\n",
-                    state->config.sx1262_spi_device,
-                    radio_name(LEOS_RADIO_SX1262));
-            log_errno_message("init_state SPI open");
+            log_message(LOG_LEVEL_ERROR, "init_state: failed to open SPI device %s for %s",
+                        state->config.sx1262_spi_device, radio_name(LEOS_RADIO_SX1262));
+            log_errno_message(LOG_LEVEL_ERROR, "init_state SPI open");
             return -1;
         }
     }
@@ -765,11 +988,9 @@ static int init_state(app_state_t *state)
         state->sx1268_spi_fd = open_spi_device(state->config.sx1268_spi_device);
         if (state->sx1268_spi_fd < 0)
         {
-            fprintf(stderr,
-                    "radio_receiver: init_state: failed to open SPI device %s for %s\n",
-                    state->config.sx1268_spi_device,
-                    radio_name(LEOS_RADIO_SX1268));
-            log_errno_message("init_state SPI open");
+            log_message(LOG_LEVEL_ERROR, "init_state: failed to open SPI device %s for %s",
+                        state->config.sx1268_spi_device, radio_name(LEOS_RADIO_SX1268));
+            log_errno_message(LOG_LEVEL_ERROR, "init_state SPI open");
             return -1;
         }
     }
@@ -777,20 +998,16 @@ static int init_state(app_state_t *state)
     state->server_fd = open_server_socket(state->config.socket_path);
     if (state->server_fd < 0)
     {
-        fprintf(stderr,
-                "radio_receiver: init_state: failed to open server socket %s\n",
-                state->config.socket_path);
-        log_errno_message("init_state socket setup");
+        log_message(LOG_LEVEL_ERROR, "init_state: failed to open server socket %s", state->config.socket_path);
+        log_errno_message(LOG_LEVEL_ERROR, "init_state socket setup");
         return -1;
     }
 
     state->gpio_chip = gpiod_chip_open(DEFAULT_GPIO_CHIP);
     if (state->gpio_chip == NULL)
     {
-        fprintf(stderr,
-                "radio_receiver: init_state: failed to open GPIO chip %s\n",
-                DEFAULT_GPIO_CHIP);
-        log_errno_message("init_state GPIO chip open");
+        log_message(LOG_LEVEL_ERROR, "init_state: failed to open GPIO chip %s", DEFAULT_GPIO_CHIP);
+        log_errno_message(LOG_LEVEL_ERROR, "init_state GPIO chip open");
         return -1;
     }
 
@@ -804,26 +1021,22 @@ static int init_state(app_state_t *state)
 
     if (state->config.sx1262_enabled && (request_dio1_line(state, &state->sx1262) != 0))
     {
-        fprintf(stderr,
-                "radio_receiver: init_state: failed to request DIO1 line %u for %s\n",
-                state->sx1262.hw.pin_dio1,
-                radio_name(state->sx1262.radio));
-        log_errno_message("init_state DIO1 request");
+        log_message(LOG_LEVEL_ERROR, "init_state: failed to request DIO1 line %u for %s",
+                    state->sx1262.hw.pin_dio1, radio_name(state->sx1262.radio));
+        log_errno_message(LOG_LEVEL_ERROR, "init_state DIO1 request");
         return -1;
     }
     if (state->config.sx1268_enabled && (request_dio1_line(state, &state->sx1268) != 0))
     {
-        fprintf(stderr,
-                "radio_receiver: init_state: failed to request DIO1 line %u for %s\n",
-                state->sx1268.hw.pin_dio1,
-                radio_name(state->sx1268.radio));
-        log_errno_message("init_state DIO1 request");
+        log_message(LOG_LEVEL_ERROR, "init_state: failed to request DIO1 line %u for %s",
+                    state->sx1268.hw.pin_dio1, radio_name(state->sx1268.radio));
+        log_errno_message(LOG_LEVEL_ERROR, "init_state DIO1 request");
         return -1;
     }
 
     if (pipe(irq_pipe_fds) != 0)
     {
-        log_errno_message("init_state IRQ pipe creation");
+        log_errno_message(LOG_LEVEL_ERROR, "init_state IRQ pipe creation");
         return -1;
     }
     state->irq_pipe_read_fd = irq_pipe_fds[0];
@@ -835,85 +1048,69 @@ static int init_state(app_state_t *state)
         status = leos_sx126x_init(LEOS_RADIO_SX1262, &state->sx1262.hw, &state->sx1262.cfg);
         if (status != LEOS_RADIO_OK)
         {
-            fprintf(stderr,
-                    "radio_receiver: init_state: leos_sx126x_init(%s) failed with %s (%d)\n",
-                    radio_name(LEOS_RADIO_SX1262),
-                    radio_status_name(status),
-                    (int)status);
+            log_message(LOG_LEVEL_ERROR, "init_state: leos_sx126x_init(%s) failed with %s (%d)",
+                        radio_name(LEOS_RADIO_SX1262), radio_status_name(status), (int)status);
             return -1;
         }
-        fprintf(stderr,
-                "radio_receiver: init_state: leos_sx126x_init(%s) succeeded"
-                " [spi=%s nss=%u busy=%u reset=%u dio1=%u]\n",
-                radio_name(LEOS_RADIO_SX1262),
-                radio_spi_device_path(state, LEOS_RADIO_SX1262),
-                state->sx1262.hw.pin_nss,
-                state->sx1262.hw.pin_busy,
-                state->sx1262.hw.pin_reset,
-                state->sx1262.hw.pin_dio1);
+        log_message(LOG_LEVEL_INFO,
+                    "init_state: leos_sx126x_init(%s) succeeded [spi=%s nss=%u busy=%u reset=%u dio1=%u]",
+                    radio_name(LEOS_RADIO_SX1262),
+                    radio_spi_device_path(state, LEOS_RADIO_SX1262),
+                    state->sx1262.hw.pin_nss,
+                    state->sx1262.hw.pin_busy,
+                    state->sx1262.hw.pin_reset,
+                    state->sx1262.hw.pin_dio1);
     }
     if (state->config.sx1268_enabled)
     {
         status = leos_sx126x_init(LEOS_RADIO_SX1268, &state->sx1268.hw, &state->sx1268.cfg);
         if (status != LEOS_RADIO_OK)
         {
-            fprintf(stderr,
-                    "radio_receiver: init_state: leos_sx126x_init(%s) failed with %s (%d)\n",
-                    radio_name(LEOS_RADIO_SX1268),
-                    radio_status_name(status),
-                    (int)status);
+            log_message(LOG_LEVEL_ERROR, "init_state: leos_sx126x_init(%s) failed with %s (%d)",
+                        radio_name(LEOS_RADIO_SX1268), radio_status_name(status), (int)status);
             return -1;
         }
-        fprintf(stderr,
-                "radio_receiver: init_state: leos_sx126x_init(%s) succeeded"
-                " [spi=%s nss=%u busy=%u reset=%u dio1=%u]\n",
-                radio_name(LEOS_RADIO_SX1268),
-                radio_spi_device_path(state, LEOS_RADIO_SX1268),
-                state->sx1268.hw.pin_nss,
-                state->sx1268.hw.pin_busy,
-                state->sx1268.hw.pin_reset,
-                state->sx1268.hw.pin_dio1);
+        log_message(LOG_LEVEL_INFO,
+                    "init_state: leos_sx126x_init(%s) succeeded [spi=%s nss=%u busy=%u reset=%u dio1=%u]",
+                    radio_name(LEOS_RADIO_SX1268),
+                    radio_spi_device_path(state, LEOS_RADIO_SX1268),
+                    state->sx1268.hw.pin_nss,
+                    state->sx1268.hw.pin_busy,
+                    state->sx1268.hw.pin_reset,
+                    state->sx1268.hw.pin_dio1);
     }
     if (state->config.sx1262_enabled)
     {
         status = leos_sx126x_start_rx(LEOS_RADIO_SX1262);
         if (status != LEOS_RADIO_OK)
         {
-            fprintf(stderr,
-                    "radio_receiver: init_state: leos_sx126x_start_rx(%s) failed with %s (%d)\n",
-                    radio_name(LEOS_RADIO_SX1262),
-                    radio_status_name(status),
-                    (int)status);
+            log_message(LOG_LEVEL_ERROR, "init_state: leos_sx126x_start_rx(%s) failed with %s (%d)",
+                        radio_name(LEOS_RADIO_SX1262), radio_status_name(status), (int)status);
             return -1;
         }
-        fprintf(stderr,
-                "radio_receiver: init_state: leos_sx126x_start_rx(%s) succeeded\n",
-                radio_name(LEOS_RADIO_SX1262));
+        log_message(LOG_LEVEL_INFO, "init_state: leos_sx126x_start_rx(%s) succeeded",
+                    radio_name(LEOS_RADIO_SX1262));
     }
     if (state->config.sx1268_enabled)
     {
         status = leos_sx126x_start_rx(LEOS_RADIO_SX1268);
         if (status != LEOS_RADIO_OK)
         {
-            fprintf(stderr,
-                    "radio_receiver: init_state: leos_sx126x_start_rx(%s) failed with %s (%d)\n",
-                    radio_name(LEOS_RADIO_SX1268),
-                    radio_status_name(status),
-                    (int)status);
+            log_message(LOG_LEVEL_ERROR, "init_state: leos_sx126x_start_rx(%s) failed with %s (%d)",
+                        radio_name(LEOS_RADIO_SX1268), radio_status_name(status), (int)status);
             return -1;
         }
-        fprintf(stderr,
-                "radio_receiver: init_state: leos_sx126x_start_rx(%s) succeeded\n",
-                radio_name(LEOS_RADIO_SX1268));
+        log_message(LOG_LEVEL_INFO, "init_state: leos_sx126x_start_rx(%s) succeeded",
+                    radio_name(LEOS_RADIO_SX1268));
     }
 
     if (pthread_create(&state->irq_thread, NULL, irq_thread_main, state) != 0)
     {
-        log_errno_message("init_state IRQ thread creation");
+        log_errno_message(LOG_LEVEL_ERROR, "init_state IRQ thread creation");
         return -1;
     }
 
-    log_info("init_state: startup completed successfully");
+    log_message(LOG_LEVEL_INFO, "init_state: startup completed successfully");
 
     return 0;
 }
@@ -1000,7 +1197,7 @@ int main(void)
 
     if (init_state(&state) != 0)
     {
-        log_error("initialization failed");
+        log_message(LOG_LEVEL_ERROR, "initialization failed");
         cleanup_state(&state);
         return 1;
     }
@@ -1032,6 +1229,7 @@ int main(void)
         poll_rc = poll(fds, nfds, app_poll_timeout_ms(&state));
         if (poll_rc < 0)
         {
+            log_errno_message(LOG_LEVEL_ERROR, "main loop poll");
             break;
         }
 
@@ -1062,6 +1260,7 @@ int main(void)
 
         (void)service_radio(&state, &state.sx1262);
         (void)service_radio(&state, &state.sx1268);
+        maybe_log_heartbeat(&state);
     }
 
     cleanup_state(&state);
