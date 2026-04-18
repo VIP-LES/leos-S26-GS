@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(radio_receiver C)
+project(radio_receiver C CXX)
 set(LEOS_SX126X_PORT "linux")
 
 find_package(PkgConfig REQUIRED)
