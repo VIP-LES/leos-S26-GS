@@ -82,6 +82,7 @@ typedef struct
     struct gpiod_line_request *dio1_request;
     struct gpiod_edge_event_buffer *dio1_event_buffer;
     atomic_bool irq_pending;
+    bool restart_rx_after_tx;
     leos_radio_hw_config_t hw;
     leos_radio_config_t cfg;
 } radio_state_t;
@@ -393,24 +394,45 @@ static bool radio_is_enabled(const app_state_t *state, leos_radio_t radio)
     return state->config.sx1268_enabled;
 }
 
-static int service_radio_irq(app_state_t *state, radio_state_t *radio)
+static int service_radio(app_state_t *state, radio_state_t *radio)
 {
     leos_radio_status_t status;
+    const bool was_tx_in_flight = leos_sx126x_tx_in_flight(radio->radio);
 
     if (!radio_is_enabled(state, radio->radio))
     {
         return 0;
     }
 
-    fprintf(stderr, "radio_receiver: servicing IRQ for %s\n", radio_name(radio->radio));
-
     atomic_store(&radio->irq_pending, false);
 
-    status = leos_sx126x_process_irq(radio->radio);
+    status = leos_sx126x_poll(radio->radio);
     if (status != LEOS_RADIO_OK)
     {
-        fprintf(stderr, "radio_receiver: process_irq failed for %s\n", radio_name(radio->radio));
+        fprintf(stderr, "radio_receiver: poll failed for %s\n", radio_name(radio->radio));
         return -1;
+    }
+
+    if (was_tx_in_flight && !leos_sx126x_tx_in_flight(radio->radio))
+    {
+        const leos_radio_status_t tx_status = leos_sx126x_last_tx_status(radio->radio);
+
+        if (radio->restart_rx_after_tx && (tx_status == LEOS_RADIO_OK))
+        {
+            status = leos_sx126x_start_rx(radio->radio);
+            if (status != LEOS_RADIO_OK)
+            {
+                fprintf(stderr, "radio_receiver: restart RX failed for %s\n", radio_name(radio->radio));
+                return -1;
+            }
+        }
+
+        radio->restart_rx_after_tx = false;
+        if (send_tx_result(state, radio->radio, ipc_tx_status_from_radio_status(tx_status)) != 0)
+        {
+            fprintf(stderr, "radio_receiver: send_tx_result failed for %s\n", radio_name(radio->radio));
+            return -1;
+        }
     }
 
     if (leos_sx126x_packet_available(radio->radio))
@@ -450,6 +472,7 @@ static int handle_client_message(app_state_t *state)
     leos_radio_t radio;
     leos_radio_status_t status;
     leos_radio_mode_t previous_mode;
+    radio_state_t *radio_state;
     size_t payload_len;
 
     len = recv(state->client_fd, buf, sizeof(buf), 0);
@@ -471,6 +494,7 @@ static int handle_client_message(app_state_t *state)
     }
 
     radio = (buf[1] == (uint8_t)LEOS_RADIO_SX1268) ? LEOS_RADIO_SX1268 : LEOS_RADIO_SX1262;
+    radio_state = (radio == LEOS_RADIO_SX1268) ? &state->sx1268 : &state->sx1262;
     payload_len = (size_t)len - 2u;
     if (payload_len == 0u)
     {
@@ -483,13 +507,25 @@ static int handle_client_message(app_state_t *state)
     }
 
     previous_mode = leos_sx126x_mode(radio);
-    status = leos_sx126x_send(radio, &buf[2], payload_len);
-    if ((status == LEOS_RADIO_OK) && (previous_mode == LEOS_RADIO_MODE_RX))
+    status = leos_sx126x_start_tx(radio, &buf[2], payload_len);
+    if (status != LEOS_RADIO_OK)
     {
-        status = leos_sx126x_start_rx(radio);
+        return send_tx_result(state, radio, ipc_tx_status_from_radio_status(status));
     }
 
-    return send_tx_result(state, radio, ipc_tx_status_from_radio_status(status));
+    radio_state->restart_rx_after_tx = (previous_mode == LEOS_RADIO_MODE_RX);
+    return 0;
+}
+
+static int app_poll_timeout_ms(const app_state_t *state)
+{
+    if ((state->config.sx1262_enabled && leos_sx126x_tx_in_flight(LEOS_RADIO_SX1262)) ||
+        (state->config.sx1268_enabled && leos_sx126x_tx_in_flight(LEOS_RADIO_SX1268)))
+    {
+        return 50;
+    }
+
+    return -1;
 }
 
 static int request_dio1_line(app_state_t *state, radio_state_t *radio)
@@ -993,7 +1029,7 @@ int main(void)
         fds[nfds].revents = 0;
         nfds++;
 
-        poll_rc = poll(fds, nfds, -1);
+        poll_rc = poll(fds, nfds, app_poll_timeout_ms(&state));
         if (poll_rc < 0)
         {
             break;
@@ -1024,14 +1060,8 @@ int main(void)
             }
         }
 
-        if (atomic_load(&state.sx1262.irq_pending))
-        {
-            (void)service_radio_irq(&state, &state.sx1262);
-        }
-        if (atomic_load(&state.sx1268.irq_pending))
-        {
-            (void)service_radio_irq(&state, &state.sx1268);
-        }
+        (void)service_radio(&state, &state.sx1262);
+        (void)service_radio(&state, &state.sx1268);
     }
 
     cleanup_state(&state);
