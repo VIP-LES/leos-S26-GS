@@ -52,10 +52,6 @@ class EfmPayload(BaseModel):
 
     time: str
     adc1_ch1_diff: float | None = None
-    adc1_ch2_sensing: float | None = None
-    adc1_ch3_reference: float | None = None
     adc1_ch4_breakbeam: float | None = None
     adc2_ch1_diff: float | None = None
-    adc2_ch2_sensing: float | None = None
-    adc2_ch3_reference: float | None = None
     adc2_ch4_breakbeam: float | None = None

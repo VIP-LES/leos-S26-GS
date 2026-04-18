@@ -82,12 +82,8 @@ class TelemetryDecoderTests(unittest.TestCase):
             "time": "2026-03-18T00:00:00+00:00",
             "valid": False,
             "adc1_ch1_diff": 1.0,
-            "adc1_ch2_sensing": 2.0,
-            "adc1_ch3_reference": 3.0,
             "adc1_ch4_breakbeam": 4.0,
             "adc2_ch1_diff": 5.0,
-            "adc2_ch2_sensing": 6.0,
-            "adc2_ch3_reference": 7.0,
             "adc2_ch4_breakbeam": 8.0,
         }
         frame = encode_rf_frame("efm", payload, sequence=9)

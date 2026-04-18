@@ -86,12 +86,8 @@ def ensure_schema():
             CREATE TABLE IF NOT EXISTS efm_data (
                 time                timestamptz PRIMARY KEY,
                 adc1_ch1_diff       double precision,
-                adc1_ch2_sensing    double precision,
-                adc1_ch3_reference  double precision,
                 adc1_ch4_breakbeam  double precision,
                 adc2_ch1_diff       double precision,
-                adc2_ch2_sensing    double precision,
-                adc2_ch3_reference  double precision,
                 adc2_ch4_breakbeam  double precision
             )
             """
@@ -119,13 +115,13 @@ def ensure_schema():
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_track_deg double precision")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_sats_used integer")
         cur.execute("ALTER TABLE sensors_and_gps_data ADD COLUMN IF NOT EXISTS gps_sats_visible integer")
+        cur.execute("ALTER TABLE efm_data DROP COLUMN IF EXISTS adc1_ch2_sensing")
+        cur.execute("ALTER TABLE efm_data DROP COLUMN IF EXISTS adc1_ch3_reference")
+        cur.execute("ALTER TABLE efm_data DROP COLUMN IF EXISTS adc2_ch2_sensing")
+        cur.execute("ALTER TABLE efm_data DROP COLUMN IF EXISTS adc2_ch3_reference")
         cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch1_diff double precision")
-        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch2_sensing double precision")
-        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch3_reference double precision")
         cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc1_ch4_breakbeam double precision")
         cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch1_diff double precision")
-        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch2_sensing double precision")
-        cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch3_reference double precision")
         cur.execute("ALTER TABLE efm_data ADD COLUMN IF NOT EXISTS adc2_ch4_breakbeam double precision")
         cur.execute(
             "SELECT create_hypertable('sensors_and_gps_data', 'time', "
@@ -205,21 +201,16 @@ def insert_efm_row(row: dict) -> bool:
     """Insert one EFM row."""
     sql = """
         INSERT INTO efm_data
-            (time, adc1_ch1_diff, adc1_ch2_sensing, adc1_ch3_reference,
-             adc1_ch4_breakbeam, adc2_ch1_diff, adc2_ch2_sensing,
-             adc2_ch3_reference, adc2_ch4_breakbeam)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (time, adc1_ch1_diff, adc1_ch4_breakbeam,
+             adc2_ch1_diff, adc2_ch4_breakbeam)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (time) DO NOTHING
     """
     values = (
         row["time"],
         row.get("adc1_ch1_diff"),
-        row.get("adc1_ch2_sensing"),
-        row.get("adc1_ch3_reference"),
         row.get("adc1_ch4_breakbeam"),
         row.get("adc2_ch1_diff"),
-        row.get("adc2_ch2_sensing"),
-        row.get("adc2_ch3_reference"),
         row.get("adc2_ch4_breakbeam"),
     )
     conn = _get_conn()

@@ -15,7 +15,7 @@ RF_MESSAGE_EFM = 0x02
 RF_MESSAGE_COMMAND = 0x03
 
 RADIO_SENSOR_GPS_PAYLOAD_SIZE = 131
-RADIO_EFM_PAYLOAD_SIZE = 41
+RADIO_EFM_PAYLOAD_SIZE = 25
 
 MESSAGE_TYPE_TO_QUEUE = {
     RF_MESSAGE_SENSOR_GPS: SENSORS_AND_GPS,
@@ -204,12 +204,8 @@ def _decode_efm_payload(payload_bytes: bytes) -> dict:
     payload["t_pkt_us"], offset = _read_u64_le(payload_bytes, offset)
     payload["valid"], offset = _read_bool(payload_bytes, offset)
     payload["adc1_ch1_diff"], offset = _read_float_le(payload_bytes, offset)
-    payload["adc1_ch2_sensing"], offset = _read_float_le(payload_bytes, offset)
-    payload["adc1_ch3_reference"], offset = _read_float_le(payload_bytes, offset)
     payload["adc1_ch4_breakbeam"], offset = _read_float_le(payload_bytes, offset)
     payload["adc2_ch1_diff"], offset = _read_float_le(payload_bytes, offset)
-    payload["adc2_ch2_sensing"], offset = _read_float_le(payload_bytes, offset)
-    payload["adc2_ch3_reference"], offset = _read_float_le(payload_bytes, offset)
     payload["adc2_ch4_breakbeam"], offset = _read_float_le(payload_bytes, offset)
 
     if offset != RADIO_EFM_PAYLOAD_SIZE:
@@ -279,12 +275,8 @@ def _encode_efm_payload(payload: dict) -> bytes:
     _write_u64_le(buf, _payload_time_to_us(payload))
     _write_bool(buf, bool(payload.get("valid", True)))
     _write_float_le(buf, payload["adc1_ch1_diff"])
-    _write_float_le(buf, payload["adc1_ch2_sensing"])
-    _write_float_le(buf, payload["adc1_ch3_reference"])
     _write_float_le(buf, payload["adc1_ch4_breakbeam"])
     _write_float_le(buf, payload["adc2_ch1_diff"])
-    _write_float_le(buf, payload["adc2_ch2_sensing"])
-    _write_float_le(buf, payload["adc2_ch3_reference"])
     _write_float_le(buf, payload["adc2_ch4_breakbeam"])
 
     if len(buf) != RADIO_EFM_PAYLOAD_SIZE:
@@ -400,12 +392,8 @@ def rf_payload_to_ingest_payload(message_type: str, payload: dict) -> dict:
         return {
             "time": _us_to_iso(payload["t_pkt_us"]),
             "adc1_ch1_diff": payload["adc1_ch1_diff"] if valid else None,
-            "adc1_ch2_sensing": payload["adc1_ch2_sensing"] if valid else None,
-            "adc1_ch3_reference": payload["adc1_ch3_reference"] if valid else None,
             "adc1_ch4_breakbeam": payload["adc1_ch4_breakbeam"] if valid else None,
             "adc2_ch1_diff": payload["adc2_ch1_diff"] if valid else None,
-            "adc2_ch2_sensing": payload["adc2_ch2_sensing"] if valid else None,
-            "adc2_ch3_reference": payload["adc2_ch3_reference"] if valid else None,
             "adc2_ch4_breakbeam": payload["adc2_ch4_breakbeam"] if valid else None,
         }
 
